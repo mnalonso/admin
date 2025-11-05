@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QDialog,
     QDialogButtonBox,
-    QComboBox,
+    QGridLayout,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -594,6 +594,8 @@ class VistaHorasTeam(QWidget):
         "afontana",
     ]
 
+    _COLUMNAS = 3
+
     def __init__(self, credentials: Tuple[str, str]):
         super().__init__()
         self._credentials = credentials
@@ -605,77 +607,108 @@ class VistaHorasTeam(QWidget):
         header.addWidget(QLabel("<b>Horas team</b>"))
         header.addStretch()
         self._btn_actualizar = QPushButton("Actualizar")
-        self._btn_actualizar.clicked.connect(self._consultar_usuario_actual)
+        self._btn_actualizar.clicked.connect(self._consultar_todos)
         header.addWidget(self._btn_actualizar)
         layout.addLayout(header)
 
-        selector_layout = QHBoxLayout()
-        selector_layout.addWidget(QLabel("Usuario:"))
-        self._combo = QComboBox()
-        self._combo.blockSignals(True)
-        for usuario in self._USUARIOS:
-            self._combo.addItem(usuario, usuario)
-        self._combo.blockSignals(False)
-        self._combo.currentIndexChanged.connect(self._on_usuario_cambiado)
-        selector_layout.addWidget(self._combo)
-        selector_layout.addStretch()
-        layout.addLayout(selector_layout)
-
-        self._estado = QLabel("Seleccioná un usuario para ver las horas cargadas.")
+        self._estado = QLabel("Consultá las horas cargadas del equipo.")
         self._estado.setWordWrap(True)
         layout.addWidget(self._estado)
 
-        self._panel = HorasPanel(self._credentials)
-        layout.addWidget(self._panel)
+        self._contenedor_usuarios = QWidget()
+        self._grid = QGridLayout(self._contenedor_usuarios)
+        self._grid.setSpacing(16)
+        self._usuarios = []
 
-        if self._combo.count():
-            self._consultar_usuario_actual()
+        for indice, login in enumerate(self._USUARIOS):
+            fila = indice // self._COLUMNAS
+            columna = indice % self._COLUMNAS
+            info_usuario = self._crear_panel_usuario(login)
+            self._usuarios.append(info_usuario)
+            self._grid.addWidget(info_usuario["widget"], fila, columna)
 
-    def _on_usuario_cambiado(self):
+        layout.addWidget(self._contenedor_usuarios)
+
+        if self._usuarios:
+            self._consultar_todos()
+
+    def _crear_panel_usuario(self, login: str):
+        widget = QWidget()
+        contenedor = QVBoxLayout(widget)
+        contenedor.setContentsMargins(0, 0, 0, 0)
+        titulo = QLabel(f"<b>{login}</b>")
+        titulo.setWordWrap(True)
+        contenedor.addWidget(titulo)
+
+        estado = QLabel("Listo para consultar.")
+        estado.setWordWrap(True)
+        contenedor.addWidget(estado)
+
+        panel = HorasPanel(self._credentials)
+        contenedor.addWidget(panel)
+
+        return {
+            "login": login,
+            "widget": widget,
+            "titulo": titulo,
+            "estado": estado,
+            "panel": panel,
+        }
+
+    def _consultar_todos(self):
         if self._cargando:
-            return
-        self._consultar_usuario_actual()
-
-    def _consultar_usuario_actual(self):
-        if not self._combo.count():
-            return
-
-        identificador = self._combo.currentData()
-        if not identificador:
             return
 
         self._establecer_cargando(True)
-        self._estado.setText("Buscando horas cargadas…")
+        self._estado.setText("Buscando horas cargadas del equipo…")
         QApplication.processEvents()
 
-        try:
-            if identificador in self._cache_usuarios:
-                usuario_id, nombre_cache = self._cache_usuarios[identificador]
-            else:
-                usuario_id, nombre_cache = resolver_usuario(self._credentials, identificador)
-                if usuario_id is None:
-                    raise ValueError("No se encontró el usuario especificado en Redmine.")
-                self._cache_usuarios[identificador] = (usuario_id, nombre_cache)
+        errores: list[str] = []
 
-            resumen = self._panel.mostrar_para_usuario(usuario_id)
-        except (RequestException, ValueError) as exc:
-            self._estado.setText(f"Error consultando Redmine: {exc}")
-            self._panel.limpiar()
-        else:
-            nombre_visible = nombre_cache or identificador
-            self._estado.setText(
-                (
-                    f"Usuario: {nombre_visible} (ID {usuario_id}). "
-                    f"Mes anterior: {resumen['anterior_total']:.2f} h en {resumen['anterior_dias']} días. "
-                    f"Mes en curso: {resumen['actual_total']:.2f} h en {resumen['actual_dias']} días."
+        for info in self._usuarios:
+            login = info["login"]
+            estado = info["estado"]
+            estado.setText("Consultando…")
+            QApplication.processEvents()
+
+            try:
+                if login in self._cache_usuarios:
+                    usuario_id, nombre_cache = self._cache_usuarios[login]
+                else:
+                    usuario_id, nombre_cache = resolver_usuario(self._credentials, login)
+                    if usuario_id is None:
+                        raise ValueError("No se encontró el usuario especificado en Redmine.")
+                    self._cache_usuarios[login] = (usuario_id, nombre_cache)
+
+                resumen = info["panel"].mostrar_para_usuario(usuario_id)
+            except (RequestException, ValueError) as exc:
+                info["panel"].limpiar()
+                estado.setText(f"Error consultando Redmine: {exc}")
+                errores.append(login)
+            else:
+                nombre_visible = nombre_cache or login
+                info["titulo"].setText(
+                    f"<b>{nombre_visible}</b> <span style='color: #666;'>({login})</span>"
                 )
+                estado.setText(
+                    (
+                        f"ID {usuario_id}. Mes anterior: {resumen['anterior_total']:.2f} h en "
+                        f"{resumen['anterior_dias']} días. Mes en curso: {resumen['actual_total']:.2f} h en "
+                        f"{resumen['actual_dias']} días."
+                    )
+                )
+
+        if errores:
+            self._estado.setText(
+                "No se pudieron actualizar todos los usuarios: " + ", ".join(errores)
             )
-        finally:
-            self._establecer_cargando(False)
+        else:
+            self._estado.setText("Horas actualizadas para todo el equipo.")
+
+        self._establecer_cargando(False)
 
     def _establecer_cargando(self, cargando: bool):
         self._cargando = cargando
-        self._combo.setEnabled(not cargando)
         self._btn_actualizar.setEnabled(not cargando)
 
 
