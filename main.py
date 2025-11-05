@@ -1,10 +1,21 @@
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QVBoxLayout, QTabWidget,
-    QToolBar, QStatusBar, QFileDialog, QMessageBox, QMenu, QStyle, QStyleFactory,
-    QTableWidget, QTableWidgetItem, QFormLayout, QLineEdit, QPushButton, QHBoxLayout, QHeaderView,
-    QDialog, QDialogButtonBox
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QLabel,
+    QVBoxLayout,
+    QTabWidget,
+    QMessageBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QFormLayout,
+    QLineEdit,
+    QPushButton,
+    QHBoxLayout,
+    QHeaderView,
+    QDialog,
+    QDialogButtonBox,
 )
-from PySide6.QtGui import QAction, QIcon
 from PySide6.QtCore import Qt
 import sys
 from typing import Tuple
@@ -54,47 +65,6 @@ class CredencialesDialog(QDialog):
             return
         super().accept()
 
-
-# --- Vista con formulario + tabla (para la pestaña "Inicio") ---
-class VistaInicio(QWidget):
-    def __init__(self):
-        super().__init__()
-        layout = QVBoxLayout(self)
-
-        # --- Formulario simple ---
-        form = QFormLayout()
-        self.txt_nombre = QLineEdit()
-        self.txt_apellido = QLineEdit()
-        self.txt_email = QLineEdit()
-        btn_enviar = QPushButton("Enviar")
-        btn_enviar.clicked.connect(self.enviar_formulario)
-
-        form.addRow("Nombre:", self.txt_nombre)
-        form.addRow("Apellido:", self.txt_apellido)
-        form.addRow("Email:", self.txt_email)
-        layout.addLayout(form)
-        layout.addWidget(btn_enviar)
-
-        # --- Tabla de ejemplo 6x10 ---
-        tabla = QTableWidget(6, 10)
-        tabla.setHorizontalHeaderLabels([f"Col {i+1}" for i in range(10)])
-        for f in range(6):
-            for c in range(10):
-                tabla.setItem(f, c, QTableWidgetItem(f"Fila {f+1}, Col {c+1}"))
-        layout.addWidget(tabla)
-
-        layout.addStretch()
-        self.tabla = tabla
-
-    def enviar_formulario(self):
-        nombre = self.txt_nombre.text()
-        apellido = self.txt_apellido.text()
-        email = self.txt_email.text()
-        QMessageBox.information(
-            self,
-            "Formulario enviado",
-            f"Nombre: {nombre}\nApellido: {apellido}\nEmail: {email}"
-        )
 
 class VistaTicketsSoporte(QWidget):
     def __init__(self, credentials: Tuple[str, str]):
@@ -185,141 +155,17 @@ class VistaTicketsSoporte(QWidget):
         self._btn_refresh.setEnabled(True)
 
 
-# --- Vista genérica (para las otras pestañas) ---
-class VistaPlaceholder(QWidget):
-    def __init__(self, titulo: str, descripcion: str = ""):
-        super().__init__()
-        lay = QVBoxLayout(self)
-        lbl_t = QLabel(f"<h2>{titulo}</h2>")
-        lbl_d = QLabel(descripcion or "Contenido de ejemplo…")
-        lbl_t.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        lbl_d.setWordWrap(True)
-        lay.addWidget(lbl_t)
-        lay.addWidget(lbl_d)
-        lay.addStretch()
-
-
 # --- Ventana Principal ---
 class VentanaPrincipal(QMainWindow):
     def __init__(self, credentials: Tuple[str, str]):
         super().__init__()
-        self.setWindowTitle("Demo PySide6 - Menú + Formulario + Tabla + Issues")
+        self.setWindowTitle("Tickets de soporte")
         self.resize(1000, 650)
         self._credentials = credentials
 
-        # ----- Crear pestañas -----
         self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.tabs.setMovable(True)
-
-        vistas = [
-            ("Inicio", VistaInicio()),
-            ("Carga de horas", VistaPlaceholder("Formas", "Rectángulos, círculos, flechas.")),
-            ("Corrector de tickets", VistaPlaceholder("Texto", "Cajas de texto, tipografías.")),
-            ("Tickets de soporte", VistaTicketsSoporte(self._credentials)),
-            ("Colores", VistaPlaceholder("Colores", "Paletas, cuentagotas.")),
-            ("Efectos", VistaPlaceholder("Efectos", "Filtros y ajustes rápidos.")),
-            ("Capas", VistaPlaceholder("Capas", "Organiza elementos por capas.")),
-            ("Historial", VistaPlaceholder("Historial", "Deshacer/rehacer y snapshots.")),
-            ("Configuración", VistaPlaceholder("Configuración", "Preferencias de la aplicación."))
-        ]
-        for nombre, widget in vistas:
-            self.tabs.addTab(widget, nombre)
+        self.tabs.addTab(VistaTicketsSoporte(self._credentials), "Tickets de soporte")
         self.setCentralWidget(self.tabs)
-
-        # ----- Menús, barra, estado -----
-        self._crear_menus()
-        self._crear_toolbar()
-        self.status = QStatusBar()
-        self.setStatusBar(self.status)
-        self.status.showMessage("Listo")
-        QApplication.setStyle(QStyleFactory.create("Fusion"))
-
-    # ====== Menús ======
-    def _crear_menus(self):
-        menubar = self.menuBar()
-
-        # Archivo
-        m_archivo = menubar.addMenu("&Archivo")
-        act_nuevo = QAction(self.style().standardIcon(QStyle.SP_FileIcon), "Nuevo", self)
-        act_nuevo.setShortcut("Ctrl+N")
-        act_nuevo.triggered.connect(self.accion_nuevo)
-
-        act_abrir = QAction(self.style().standardIcon(QStyle.SP_DialogOpenButton), "Abrir…", self)
-        act_abrir.setShortcut("Ctrl+O")
-        act_abrir.triggered.connect(self.accion_abrir)
-
-        act_guardar = QAction(self.style().standardIcon(QStyle.SP_DialogSaveButton), "Guardar", self)
-        act_guardar.setShortcut("Ctrl+S")
-        act_guardar.triggered.connect(self.accion_guardar)
-
-        m_archivo.addAction(act_nuevo)
-        m_archivo.addAction(act_abrir)
-        m_archivo.addAction(act_guardar)
-        m_archivo.addSeparator()
-        m_archivo.addAction("Salir", self.close)
-
-        # Editar
-        m_editar = menubar.addMenu("&Editar")
-        for texto, sc in [("Deshacer", "Ctrl+Z"), ("Rehacer", "Ctrl+Y"),
-                          ("Copiar", "Ctrl+C"), ("Pegar", "Ctrl+V")]:
-            act = QAction(texto, self)
-            act.setShortcut(sc)
-            act.triggered.connect(self._accion_stub)
-            m_editar.addAction(act)
-
-        # Ver
-        m_ver = menubar.addMenu("&Ver")
-        self.act_toggle_toolbar = QAction("Mostrar barra de herramientas", self, checkable=True, checked=True)
-        self.act_toggle_toolbar.triggered.connect(self._toggle_toolbar)
-        self.act_toggle_status = QAction("Mostrar barra de estado", self, checkable=True, checked=True)
-        self.act_toggle_status.triggered.connect(self._toggle_status)
-        m_ver.addAction(self.act_toggle_toolbar)
-        m_ver.addAction(self.act_toggle_status)
-
-        # Ayuda
-        m_ayuda = menubar.addMenu("Ay&uda")
-        act_acerca = QAction("Acerca de…", self)
-        act_acerca.triggered.connect(self.accion_acerca_de)
-        m_ayuda.addAction(act_acerca)
-
-        self.act_nuevo = act_nuevo
-        self.act_abrir = act_abrir
-        self.act_guardar = act_guardar
-
-    # ====== Toolbar ======
-    def _crear_toolbar(self):
-        tb = QToolBar("Acceso rápido", self)
-        tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.addToolBar(Qt.TopToolBarArea, tb)
-        tb.addAction(self.act_nuevo)
-        tb.addAction(self.act_abrir)
-        tb.addAction(self.act_guardar)
-        self.toolbar = tb
-
-    # ====== Acciones y helpers ======
-    def _toggle_toolbar(self, checked): self.toolbar.setVisible(checked)
-    def _toggle_status(self, checked): self.statusBar().setVisible(checked)
-    def _accion_stub(self): self.status.showMessage("Acción demo", 2000)
-
-    def accion_nuevo(self):
-        QMessageBox.information(self, "Nuevo", "Crear un nuevo documento.")
-
-    def accion_abrir(self):
-        ruta, _ = QFileDialog.getOpenFileName(self, "Abrir", "", "Proyecto (*.pnt);;Todos (*.*)")
-        if ruta:
-            QMessageBox.information(self, "Abrir", f"Abriste:\n{ruta}")
-
-    def accion_guardar(self):
-        ruta, _ = QFileDialog.getSaveFileName(self, "Guardar", "proyecto.pnt", "Proyecto (*.pnt)")
-        if ruta:
-            QMessageBox.information(self, "Guardar", f"Guardado en:\n{ruta}")
-
-    def accion_acerca_de(self):
-        QMessageBox.information(
-            self, "Acerca de",
-            "Demo PySide6\nMenú tipo Paint + Formulario + Tabla + Issues (JSON)."
-        )
 
 
 if __name__ == "__main__":
