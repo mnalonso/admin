@@ -320,15 +320,35 @@ class VistaActividadUsuario(QWidget):
 
     def _obtener_tickets_usuario(self, usuario_id: int):
         usuario, clave = self._credentials
-        respuesta = requests.get(
-            REDMINE_ISSUES_SEARCH_URL,
-            params={"assigned_to_id": usuario_id, "status_id": "*", "limit": 100},
-            auth=HTTPBasicAuth(usuario, clave),
-            timeout=15,
-            verify=False,
-        )
-        respuesta.raise_for_status()
-        return respuesta.json().get("issues", []) or []
+        issues = []
+        offset = 0
+        limit = 100
+
+        while True:
+            respuesta = requests.get(
+                REDMINE_ISSUES_SEARCH_URL,
+                params={
+                    "assigned_to_id": usuario_id,
+                    "status_id": "*",
+                    "limit": limit,
+                    "offset": offset,
+                },
+                auth=HTTPBasicAuth(usuario, clave),
+                timeout=15,
+                verify=False,
+            )
+            respuesta.raise_for_status()
+            data = respuesta.json() or {}
+            lote = data.get("issues", []) or []
+            issues.extend(lote)
+
+            total = data.get("total_count", len(issues))
+            offset += limit
+
+            if offset >= total or not lote:
+                break
+
+        return issues
 
 
 # --- Ventana Principal ---
