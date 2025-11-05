@@ -19,6 +19,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 import sys
 from typing import Tuple
+from collections import defaultdict
+from datetime import date, timedelta
+import calendar
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -35,6 +38,85 @@ REDMINE_ISSUES_URL = (
 REDMINE_USERS_URL = f"{REDMINE_BASE_URL}/users.json"
 REDMINE_USER_DETAIL_URL = f"{REDMINE_BASE_URL}/users/{{user_id}}.json"
 REDMINE_ISSUES_SEARCH_URL = f"{REDMINE_BASE_URL}/issues.json"
+REDMINE_TIME_ENTRIES_URL = f"{REDMINE_BASE_URL}/time_entries.json"
+
+
+def resolver_usuario(credentials: Tuple[str, str], identificador: str) -> Tuple[int | None, str | None]:
+    usuario, clave = credentials
+    if identificador.isdigit():
+        url = REDMINE_USER_DETAIL_URL.format(user_id=identificador)
+        respuesta = requests.get(
+            url,
+            auth=HTTPBasicAuth(usuario, clave),
+            timeout=15,
+            verify=False,
+        )
+        if respuesta.status_code == 404:
+            return None, None
+        respuesta.raise_for_status()
+        data = respuesta.json().get("user", {})
+        return data.get("id"), data.get("name") or data.get("login")
+
+    respuesta = requests.get(
+        REDMINE_USERS_URL,
+        params={"name": identificador, "limit": 5},
+        auth=HTTPBasicAuth(usuario, clave),
+        timeout=15,
+        verify=False,
+    )
+    respuesta.raise_for_status()
+    usuarios = respuesta.json().get("users", []) or []
+    if not usuarios:
+        return None, None
+
+    usuario_obj = None
+    for candidato in usuarios:
+        if candidato.get("login", "").lower() == identificador.lower():
+            usuario_obj = candidato
+            break
+    if usuario_obj is None:
+        usuario_obj = usuarios[0]
+
+    return usuario_obj.get("id"), usuario_obj.get("name") or usuario_obj.get("login")
+
+
+def obtener_time_entries(
+    credentials: Tuple[str, str],
+    user_id: int,
+    fecha_desde: date,
+    fecha_hasta: date,
+):
+    usuario, clave = credentials
+    entradas = []
+    offset = 0
+    limit = 100
+
+    while True:
+        respuesta = requests.get(
+            REDMINE_TIME_ENTRIES_URL,
+            params={
+                "user_id": user_id,
+                "from": fecha_desde.isoformat(),
+                "to": fecha_hasta.isoformat(),
+                "limit": limit,
+                "offset": offset,
+            },
+            auth=HTTPBasicAuth(usuario, clave),
+            timeout=15,
+            verify=False,
+        )
+        respuesta.raise_for_status()
+        data = respuesta.json() or {}
+        lote = data.get("time_entries", []) or []
+        entradas.extend(lote)
+
+        total = data.get("total_count", len(entradas))
+        offset += limit
+
+        if offset >= total or not lote:
+            break
+
+    return entradas
 
 
 class CredencialesDialog(QDialog):
@@ -218,10 +300,11 @@ class VistaActividadUsuario(QWidget):
         QApplication.processEvents()
 
         try:
-            usuario_id, usuario_nombre = self._resolver_usuario(identificador)
+            usuario_id, usuario_nombre = resolver_usuario(self._credentials, identificador)
             if usuario_id is None:
                 self._estado.setText("No se encontró el usuario especificado.")
                 self._limpiar_tablas()
+                self._btn_buscar.setEnabled(True)
                 return
 
             issues = self._obtener_tickets_usuario(usuario_id)
@@ -280,44 +363,6 @@ class VistaActividadUsuario(QWidget):
         for tabla in self._tablas_por_estado.values():
             tabla["tabla"].setRowCount(0)
 
-    def _resolver_usuario(self, identificador: str) -> Tuple[int | None, str | None]:
-        usuario, clave = self._credentials
-        if identificador.isdigit():
-            url = REDMINE_USER_DETAIL_URL.format(user_id=identificador)
-            respuesta = requests.get(
-                url,
-                auth=HTTPBasicAuth(usuario, clave),
-                timeout=15,
-                verify=False,
-            )
-            if respuesta.status_code == 404:
-                return None, None
-            respuesta.raise_for_status()
-            data = respuesta.json().get("user", {})
-            return data.get("id"), data.get("name") or data.get("login")
-
-        respuesta = requests.get(
-            REDMINE_USERS_URL,
-            params={"name": identificador, "limit": 5},
-            auth=HTTPBasicAuth(usuario, clave),
-            timeout=15,
-            verify=False,
-        )
-        respuesta.raise_for_status()
-        usuarios = respuesta.json().get("users", []) or []
-        if not usuarios:
-            return None, None
-
-        usuario_obj = None
-        for candidato in usuarios:
-            if candidato.get("login", "").lower() == identificador.lower():
-                usuario_obj = candidato
-                break
-        if usuario_obj is None:
-            usuario_obj = usuarios[0]
-
-        return usuario_obj.get("id"), usuario_obj.get("name") or usuario_obj.get("login")
-
     def _obtener_tickets_usuario(self, usuario_id: int):
         usuario, clave = self._credentials
         issues = []
@@ -351,6 +396,141 @@ class VistaActividadUsuario(QWidget):
         return issues
 
 
+class VistaHorasCargadas(QWidget):
+    _COLUMNAS = ["Fecha", "Horas totales"]
+
+    def __init__(self, credentials: Tuple[str, str]):
+        super().__init__()
+        self._credentials = credentials
+
+        layout = QVBoxLayout(self)
+        header = QHBoxLayout()
+        header.addWidget(QLabel("<b>Horas cargadas</b>"))
+        header.addStretch()
+        layout.addLayout(header)
+
+        form = QHBoxLayout()
+        self._entrada_usuario = QLineEdit()
+        self._entrada_usuario.setPlaceholderText("Ingresá ID numérico o usuario de Redmine")
+        form.addWidget(self._entrada_usuario)
+
+        self._btn_buscar = QPushButton("Buscar")
+        self._btn_buscar.clicked.connect(self.buscar_usuario)
+        form.addWidget(self._btn_buscar)
+        layout.addLayout(form)
+
+        self._estado = QLabel("Ingresá un usuario y presioná Buscar.")
+        self._estado.setWordWrap(True)
+        layout.addWidget(self._estado)
+
+        self._tablas = {
+            "actual": self._crear_tabla("Mes en curso"),
+            "anterior": self._crear_tabla("Mes anterior"),
+        }
+
+        layout.addWidget(self._tablas["actual"]["contenedor"])
+        layout.addWidget(self._tablas["anterior"]["contenedor"])
+
+    def _crear_tabla(self, titulo: str):
+        contenedor = QWidget()
+        contenedor_layout = QVBoxLayout(contenedor)
+        contenedor_layout.setContentsMargins(0, 12, 0, 0)
+        contenedor_layout.addWidget(QLabel(f"<b>{titulo}</b>"))
+        tabla = QTableWidget(0, len(self._COLUMNAS))
+        tabla.setHorizontalHeaderLabels(self._COLUMNAS)
+        tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        tabla.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        tabla.horizontalHeader().setStretchLastSection(True)
+        contenedor_layout.addWidget(tabla)
+        return {"contenedor": contenedor, "tabla": tabla}
+
+    def buscar_usuario(self):
+        identificador = self._entrada_usuario.text().strip()
+        if not identificador:
+            QMessageBox.warning(self, "Dato requerido", "Ingresá un ID o usuario de Redmine.")
+            return
+
+        self._btn_buscar.setEnabled(False)
+        self._estado.setText("Buscando horas cargadas…")
+        QApplication.processEvents()
+
+        try:
+            usuario_id, usuario_nombre = resolver_usuario(self._credentials, identificador)
+            if usuario_id is None:
+                self._estado.setText("No se encontró el usuario especificado.")
+                self._limpiar_tablas()
+                self._btn_buscar.setEnabled(True)
+                return
+
+            rango_anterior, rango_actual = self._calcular_rangos()
+            horas_anterior = self._obtener_horas_por_dia(usuario_id, *rango_anterior)
+            horas_actual = self._obtener_horas_por_dia(usuario_id, *rango_actual)
+        except (RequestException, ValueError) as exc:
+            self._estado.setText(f"Error consultando Redmine: {exc}")
+            self._limpiar_tablas()
+            self._btn_buscar.setEnabled(True)
+            return
+
+        total_anterior = sum(horas for _, horas in horas_anterior)
+        total_actual = sum(horas for _, horas in horas_actual)
+
+        self._cargar_tabla(self._tablas["anterior"]["tabla"], horas_anterior)
+        self._cargar_tabla(self._tablas["actual"]["tabla"], horas_actual)
+
+        self._estado.setText(
+            (
+                f"Usuario: {usuario_nombre} (ID {usuario_id}). "
+                f"Mes anterior: {total_anterior:.2f} h en {len(horas_anterior)} días. "
+                f"Mes en curso: {total_actual:.2f} h en {len(horas_actual)} días."
+            )
+        )
+        self._btn_buscar.setEnabled(True)
+
+    def _cargar_tabla(self, tabla: QTableWidget, datos):
+        tabla.setRowCount(len(datos))
+        for fila, (fecha, horas) in enumerate(datos):
+            item_fecha = QTableWidgetItem(str(fecha))
+            item_horas = QTableWidgetItem(f"{horas:.2f}")
+            item_horas.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            tabla.setItem(fila, 0, item_fecha)
+            tabla.setItem(fila, 1, item_horas)
+        if not datos:
+            tabla.setRowCount(0)
+
+    def _limpiar_tablas(self):
+        for tabla in self._tablas.values():
+            tabla["tabla"].setRowCount(0)
+
+    def _calcular_rangos(self):
+        hoy = date.today()
+        inicio_actual = hoy.replace(day=1)
+        ultimo_dia_actual = calendar.monthrange(inicio_actual.year, inicio_actual.month)[1]
+        fin_actual = inicio_actual.replace(day=ultimo_dia_actual)
+
+        fin_anterior = inicio_actual - timedelta(days=1)
+        inicio_anterior = fin_anterior.replace(day=1)
+
+        ultimo_dia_anterior = calendar.monthrange(inicio_anterior.year, inicio_anterior.month)[1]
+        fin_anterior = inicio_anterior.replace(day=ultimo_dia_anterior)
+
+        return (inicio_anterior, fin_anterior), (inicio_actual, fin_actual)
+
+    def _obtener_horas_por_dia(self, usuario_id: int, fecha_desde: date, fecha_hasta: date):
+        entradas = obtener_time_entries(self._credentials, usuario_id, fecha_desde, fecha_hasta)
+        totales = defaultdict(float)
+        for entrada in entradas:
+            dia = entrada.get("spent_on")
+            horas = entrada.get("hours", 0)
+            if not dia:
+                continue
+            try:
+                totales[dia] += float(horas or 0)
+            except (TypeError, ValueError):
+                continue
+
+        return sorted(totales.items())
+
+
 # --- Ventana Principal ---
 class VentanaPrincipal(QMainWindow):
     def __init__(self, credentials: Tuple[str, str]):
@@ -362,6 +542,7 @@ class VentanaPrincipal(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(VistaTicketsSoporte(self._credentials), "Tickets de soporte")
         self.tabs.addTab(VistaActividadUsuario(self._credentials), "Actividad usuario")
+        self.tabs.addTab(VistaHorasCargadas(self._credentials), "Horas cargadas")
         self.setCentralWidget(self.tabs)
 
 
