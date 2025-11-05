@@ -27,10 +27,14 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+REDMINE_BASE_URL = "https://redmine.famiq.com.ar"
 REDMINE_ISSUES_URL = (
-    "https://redmine.famiq.com.ar/projects/ipin/issues.json?query_id=77&"
+    f"{REDMINE_BASE_URL}/projects/ipin/issues.json?query_id=77&"
     "sort=priority%3Adesc%2Cupdated_on%3Adesc"
 )
+REDMINE_USERS_URL = f"{REDMINE_BASE_URL}/users.json"
+REDMINE_USER_DETAIL_URL = f"{REDMINE_BASE_URL}/users/{{user_id}}.json"
+REDMINE_ISSUES_SEARCH_URL = f"{REDMINE_BASE_URL}/issues.json"
 
 
 class CredencialesDialog(QDialog):
@@ -155,6 +159,174 @@ class VistaTicketsSoporte(QWidget):
         self._btn_refresh.setEnabled(True)
 
 
+class VistaActividadUsuario(QWidget):
+    _COLUMNAS = ["ID", "Proyecto", "Estado", "Prioridad", "Subject", "Actualizado"]
+
+    def __init__(self, credentials: Tuple[str, str]):
+        super().__init__()
+        self._credentials = credentials
+
+        layout = QVBoxLayout(self)
+        header = QHBoxLayout()
+        header.addWidget(QLabel("<b>Actividad por usuario</b>"))
+        header.addStretch()
+        layout.addLayout(header)
+
+        form = QHBoxLayout()
+        self._entrada_usuario = QLineEdit()
+        self._entrada_usuario.setPlaceholderText("Ingresá ID numérico o usuario de Redmine")
+        form.addWidget(self._entrada_usuario)
+
+        self._btn_buscar = QPushButton("Buscar")
+        self._btn_buscar.clicked.connect(self.buscar_usuario)
+        form.addWidget(self._btn_buscar)
+        layout.addLayout(form)
+
+        self._estado = QLabel("Ingresá un usuario y presioná Buscar.")
+        self._estado.setWordWrap(True)
+        layout.addWidget(self._estado)
+
+        self._tablas_por_estado = {
+            "progreso": self._crear_tabla("Tickets en progreso"),
+            "pruebas": self._crear_tabla("Tickets en pruebas"),
+            "rtd": self._crear_tabla("Tickets en RTD"),
+        }
+        for tabla in self._tablas_por_estado.values():
+            layout.addWidget(tabla["contenedor"])
+
+    def _crear_tabla(self, titulo: str):
+        contenedor = QWidget()
+        contenedor_layout = QVBoxLayout(contenedor)
+        contenedor_layout.setContentsMargins(0, 12, 0, 0)
+        contenedor_layout.addWidget(QLabel(f"<b>{titulo}</b>"))
+        tabla = QTableWidget(0, len(self._COLUMNAS))
+        tabla.setHorizontalHeaderLabels(self._COLUMNAS)
+        tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        tabla.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        tabla.horizontalHeader().setStretchLastSection(True)
+        contenedor_layout.addWidget(tabla)
+        return {"contenedor": contenedor, "tabla": tabla}
+
+    def buscar_usuario(self):
+        identificador = self._entrada_usuario.text().strip()
+        if not identificador:
+            QMessageBox.warning(self, "Dato requerido", "Ingresá un ID o usuario de Redmine.")
+            return
+
+        self._btn_buscar.setEnabled(False)
+        self._estado.setText("Buscando información del usuario…")
+        QApplication.processEvents()
+
+        try:
+            usuario_id, usuario_nombre = self._resolver_usuario(identificador)
+            if usuario_id is None:
+                self._estado.setText("No se encontró el usuario especificado.")
+                self._limpiar_tablas()
+                return
+
+            issues = self._obtener_tickets_usuario(usuario_id)
+        except (RequestException, ValueError) as exc:
+            self._estado.setText(f"Error consultando Redmine: {exc}")
+            self._limpiar_tablas()
+            self._btn_buscar.setEnabled(True)
+            return
+
+        categorias = {
+            "progreso": [],
+            "pruebas": [],
+            "rtd": [],
+        }
+
+        for issue in issues:
+            estado = (issue.get("status", {}) or {}).get("name", "").lower()
+            if "progreso" in estado:
+                categorias["progreso"].append(issue)
+            elif "prueba" in estado:
+                categorias["pruebas"].append(issue)
+            elif "rtd" in estado or "ready" in estado:
+                categorias["rtd"].append(issue)
+
+        for clave, items in categorias.items():
+            tabla = self._tablas_por_estado[clave]["tabla"]
+            tabla.setRowCount(len(items))
+            for fila, issue in enumerate(items):
+                valores = [
+                    issue.get("id", ""),
+                    (issue.get("project", {}) or {}).get("name", ""),
+                    (issue.get("status", {}) or {}).get("name", ""),
+                    (issue.get("priority", {}) or {}).get("name", ""),
+                    issue.get("subject", ""),
+                    issue.get("updated_on", ""),
+                ]
+                for columna, valor in enumerate(valores):
+                    item = QTableWidgetItem(str(valor))
+                    if self._COLUMNAS[columna] == "ID":
+                        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    tabla.setItem(fila, columna, item)
+            if not items:
+                tabla.setRowCount(0)
+
+        total = sum(len(items) for items in categorias.values())
+        self._estado.setText(
+            f"Usuario: {usuario_nombre} (ID {usuario_id}). Tickets analizados: {total}."
+        )
+        self._btn_buscar.setEnabled(True)
+
+    def _limpiar_tablas(self):
+        for tabla in self._tablas_por_estado.values():
+            tabla["tabla"].setRowCount(0)
+
+    def _resolver_usuario(self, identificador: str) -> Tuple[int | None, str | None]:
+        usuario, clave = self._credentials
+        if identificador.isdigit():
+            url = REDMINE_USER_DETAIL_URL.format(user_id=identificador)
+            respuesta = requests.get(
+                url,
+                auth=HTTPBasicAuth(usuario, clave),
+                timeout=15,
+                verify=False,
+            )
+            if respuesta.status_code == 404:
+                return None, None
+            respuesta.raise_for_status()
+            data = respuesta.json().get("user", {})
+            return data.get("id"), data.get("name") or data.get("login")
+
+        respuesta = requests.get(
+            REDMINE_USERS_URL,
+            params={"name": identificador, "limit": 5},
+            auth=HTTPBasicAuth(usuario, clave),
+            timeout=15,
+            verify=False,
+        )
+        respuesta.raise_for_status()
+        usuarios = respuesta.json().get("users", []) or []
+        if not usuarios:
+            return None, None
+
+        usuario_obj = None
+        for candidato in usuarios:
+            if candidato.get("login", "").lower() == identificador.lower():
+                usuario_obj = candidato
+                break
+        if usuario_obj is None:
+            usuario_obj = usuarios[0]
+
+        return usuario_obj.get("id"), usuario_obj.get("name") or usuario_obj.get("login")
+
+    def _obtener_tickets_usuario(self, usuario_id: int):
+        usuario, clave = self._credentials
+        respuesta = requests.get(
+            REDMINE_ISSUES_SEARCH_URL,
+            params={"assigned_to_id": usuario_id, "status_id": "*", "limit": 100},
+            auth=HTTPBasicAuth(usuario, clave),
+            timeout=15,
+            verify=False,
+        )
+        respuesta.raise_for_status()
+        return respuesta.json().get("issues", []) or []
+
+
 # --- Ventana Principal ---
 class VentanaPrincipal(QMainWindow):
     def __init__(self, credentials: Tuple[str, str]):
@@ -165,6 +337,7 @@ class VentanaPrincipal(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(VistaTicketsSoporte(self._credentials), "Tickets de soporte")
+        self.tabs.addTab(VistaActividadUsuario(self._credentials), "Actividad usuario")
         self.setCentralWidget(self.tabs)
 
 
