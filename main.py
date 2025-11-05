@@ -1,291 +1,585 @@
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QVBoxLayout, QTabWidget,
-    QToolBar, QStatusBar, QFileDialog, QMessageBox, QMenu, QStyle, QStyleFactory,
-    QTableWidget, QTableWidgetItem, QFormLayout, QLineEdit, QPushButton, QHBoxLayout, QHeaderView
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QLabel,
+    QVBoxLayout,
+    QTabWidget,
+    QMessageBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QFormLayout,
+    QLineEdit,
+    QPushButton,
+    QHBoxLayout,
+    QHeaderView,
+    QDialog,
+    QDialogButtonBox,
 )
-from PySide6.QtGui import QAction, QIcon
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 import sys
+from typing import Tuple
+from collections import defaultdict
+from datetime import date, timedelta
+import calendar
+
+import requests
+from requests.auth import HTTPBasicAuth
+from requests.exceptions import RequestException
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+REDMINE_BASE_URL = "https://redmine.famiq.com.ar"
+REDMINE_ISSUES_URL = (
+    f"{REDMINE_BASE_URL}/projects/ipin/issues.json?query_id=77&"
+    "sort=priority%3Adesc%2Cupdated_on%3Adesc"
+)
+REDMINE_USERS_URL = f"{REDMINE_BASE_URL}/users.json"
+REDMINE_USER_DETAIL_URL = f"{REDMINE_BASE_URL}/users/{{user_id}}.json"
+REDMINE_ISSUES_SEARCH_URL = f"{REDMINE_BASE_URL}/issues.json"
+REDMINE_TIME_ENTRIES_URL = f"{REDMINE_BASE_URL}/time_entries.json"
 
 
-# ====== JSON embebido (tu ejemplo) ======
-ISSUES_JSON = {
-    "issues": [
-        {
-            "id": 12881,
-            "project": {"id": 42, "name": "PIN - Desarrollo"},
-            "tracker": {"id": 7, "name": "Historia"},
-            "status": {"id": 3, "name": "RTD", "is_closed": False},
-            "priority": {"id": 1, "name": "Baja"},
-            "author": {"id": 172, "name": "Florencia Galarza"},
-            "assigned_to": {"id": 211, "name": "Jean Pierre Chero Pomaleque"},
-            "category": {"id": 42, "name": "WEB"},
-            "fixed_version": {"id": 107, "name": "SPR 129"},
-            "subject": "Diferencias entre mobile y desktop  - carrito paso 3",
-            "description": "<p>Buenas!&nbsp;</p>\r\n\r\n<p>Me aviso Matias Mainini que desde el celu no puede elegir la opci\u00f3n de \u00a8otras condiciones\u00a8 dentro de las formas de pago<br />\r\n<br />\r\n![Imagen](img_66e091d53a5f7.png)</p>\r\n\r\n<p>![Imagen](img_66e091d546321.png)</p>",
-            "start_date": "2025-07-23",
-            "due_date": "2025-08-07",
-            "done_ratio": 0,
-            "is_private": False,
-            "estimated_hours": 16,
-            "total_estimated_hours": 16,
-            "spent_hours": 15.083333253860474,
-            "total_spent_hours": 15.083333253860474,
-            "custom_fields": [
-                {"id": 18, "name": "Sector", "value": "Productos Digitales"},
-                {"id": 31, "name": "Gerencia", "value": "Planeamiento Comercial"},
-                {"id": 33, "name": "Analista", "multiple": True, "value": ["Mariana Peralta"]},
-                {"id": 59, "name": "Origen", "value": ""}
-            ],
-            "created_on": "2024-09-10T18:37:09Z",
-            "updated_on": "2025-10-23T17:38:13Z",
-            "closed_on": None
-        }
-    ],
-    "total_count": 1,
-    "offset": 0,
-    "limit": 25
-}
-
-
-# --- Vista con formulario + tabla (para la pestaña "Inicio") ---
-class VistaInicio(QWidget):
-    def __init__(self):
-        super().__init__()
-        layout = QVBoxLayout(self)
-
-        # --- Formulario simple ---
-        form = QFormLayout()
-        self.txt_nombre = QLineEdit()
-        self.txt_apellido = QLineEdit()
-        self.txt_email = QLineEdit()
-        btn_enviar = QPushButton("Enviar")
-        btn_enviar.clicked.connect(self.enviar_formulario)
-
-        form.addRow("Nombre:", self.txt_nombre)
-        form.addRow("Apellido:", self.txt_apellido)
-        form.addRow("Email:", self.txt_email)
-        layout.addLayout(form)
-        layout.addWidget(btn_enviar)
-
-        # --- Tabla de ejemplo 6x10 ---
-        tabla = QTableWidget(6, 10)
-        tabla.setHorizontalHeaderLabels([f"Col {i+1}" for i in range(10)])
-        for f in range(6):
-            for c in range(10):
-                tabla.setItem(f, c, QTableWidgetItem(f"Fila {f+1}, Col {c+1}"))
-        layout.addWidget(tabla)
-
-        layout.addStretch()
-        self.tabla = tabla
-
-    def enviar_formulario(self):
-        nombre = self.txt_nombre.text()
-        apellido = self.txt_apellido.text()
-        email = self.txt_email.text()
-        QMessageBox.information(
-            self,
-            "Formulario enviado",
-            f"Nombre: {nombre}\nApellido: {apellido}\nEmail: {email}"
+def resolver_usuario(credentials: Tuple[str, str], identificador: str) -> Tuple[int | None, str | None]:
+    usuario, clave = credentials
+    if identificador.isdigit():
+        url = REDMINE_USER_DETAIL_URL.format(user_id=identificador)
+        respuesta = requests.get(
+            url,
+            auth=HTTPBasicAuth(usuario, clave),
+            timeout=15,
+            verify=False,
         )
+        if respuesta.status_code == 404:
+            return None, None
+        respuesta.raise_for_status()
+        data = respuesta.json().get("user", {})
+        return data.get("id"), data.get("name") or data.get("login")
+
+    respuesta = requests.get(
+        REDMINE_USERS_URL,
+        params={"name": identificador, "limit": 5},
+        auth=HTTPBasicAuth(usuario, clave),
+        timeout=15,
+        verify=False,
+    )
+    respuesta.raise_for_status()
+    usuarios = respuesta.json().get("users", []) or []
+    if not usuarios:
+        return None, None
+
+    usuario_obj = None
+    for candidato in usuarios:
+        if candidato.get("login", "").lower() == identificador.lower():
+            usuario_obj = candidato
+            break
+    if usuario_obj is None:
+        usuario_obj = usuarios[0]
+
+    return usuario_obj.get("id"), usuario_obj.get("name") or usuario_obj.get("login")
 
 
-# --- Vista 2: tabla desde JSON de issues ---
-class VistaIssues(QWidget):
-    def __init__(self, data: dict):
-        super().__init__()
+def obtener_time_entries(
+    credentials: Tuple[str, str],
+    user_id: int,
+    fecha_desde: date,
+    fecha_hasta: date,
+):
+    usuario, clave = credentials
+    entradas = []
+    offset = 0
+    limit = 100
+
+    while True:
+        respuesta = requests.get(
+            REDMINE_TIME_ENTRIES_URL,
+            params={
+                "user_id": user_id,
+                "from": fecha_desde.isoformat(),
+                "to": fecha_hasta.isoformat(),
+                "limit": limit,
+                "offset": offset,
+            },
+            auth=HTTPBasicAuth(usuario, clave),
+            timeout=15,
+            verify=False,
+        )
+        respuesta.raise_for_status()
+        data = respuesta.json() or {}
+        lote = data.get("time_entries", []) or []
+        entradas.extend(lote)
+
+        total = data.get("total_count", len(entradas))
+        offset += limit
+
+        if offset >= total or not lote:
+            break
+
+    return entradas
+
+
+class CredencialesDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Credenciales de Redmine")
         layout = QVBoxLayout(self)
 
-        # Definimos columnas "importantes"
-        headers = [
-            "ID", "Proyecto", "Tracker", "Estado", "Prioridad",
-            "Asignado a", "Versión", "Subject",
-            "Estimado", "Spent", "Inicio", "Vencimiento", "Actualizado"
-        ]
-        table = QTableWidget(0, len(headers))
-        table.setHorizontalHeaderLabels(headers)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        table.horizontalHeader().setStretchLastSection(True)
+        form = QFormLayout()
+        self._usuario = QLineEdit()
+        self._usuario.setPlaceholderText("Usuario")
+        self._clave = QLineEdit()
+        self._clave.setPlaceholderText("Contraseña")
+        self._clave.setEchoMode(QLineEdit.Password)
 
-        issues = data.get("issues", []) or []
-        table.setRowCount(len(issues))
+        form.addRow("Usuario:", self._usuario)
+        form.addRow("Contraseña:", self._clave)
+        layout.addLayout(form)
 
-        def g(obj, *path, default=""):
-            cur = obj
-            for p in path:
-                cur = cur.get(p) if isinstance(cur, dict) else None
-                if cur is None:
-                    return default
-            return cur
+        self._buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self._buttons.accepted.connect(self.accept)
+        self._buttons.rejected.connect(self.reject)
+        layout.addWidget(self._buttons)
 
-        for r, it in enumerate(issues):
-            values = [
-                g(it, "id"),
-                g(it, "project", "name"),
-                g(it, "tracker", "name"),
-                g(it, "status", "name"),
-                g(it, "priority", "name"),
-                g(it, "assigned_to", "name"),
-                g(it, "fixed_version", "name"),
-                g(it, "subject"),
-                f"{g(it, 'estimated_hours') or 0:.2f}",
-                f"{g(it, 'spent_hours') or 0:.2f}",
-                g(it, "start_date"),
-                g(it, "due_date"),
-                g(it, "updated_on"),
-            ]
-            for c, val in enumerate(values):
-                item = QTableWidgetItem(str(val))
-                if headers[c] in ("ID", "Estimado", "Spent"):
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                table.setItem(r, c, item)
+    def get_credentials(self) -> Tuple[str, str]:
+        return self._usuario.text().strip(), self._clave.text()
 
-        layout.addWidget(QLabel("<b>Issues (datos principales)</b>"))
-        layout.addWidget(table)
-        self.table = table
+    def accept(self):
+        usuario, clave = self.get_credentials()
+        if not usuario or not clave:
+            QMessageBox.warning(self, "Credenciales incompletas", "Ingresá usuario y contraseña de Redmine.")
+            return
+        super().accept()
 
 
-# --- Vista genérica (para las otras pestañas) ---
-class VistaPlaceholder(QWidget):
-    def __init__(self, titulo: str, descripcion: str = ""):
+class VistaTicketsSoporte(QWidget):
+    def __init__(self, credentials: Tuple[str, str]):
         super().__init__()
-        lay = QVBoxLayout(self)
-        lbl_t = QLabel(f"<h2>{titulo}</h2>")
-        lbl_d = QLabel(descripcion or "Contenido de ejemplo…")
-        lbl_t.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        lbl_d.setWordWrap(True)
-        lay.addWidget(lbl_t)
-        lay.addWidget(lbl_d)
-        lay.addStretch()
+        self._credentials = credentials
+
+        layout = QVBoxLayout(self)
+        header = QHBoxLayout()
+        header.addWidget(QLabel("<b>Tickets de soporte</b>"))
+        header.addStretch()
+        self._btn_refresh = QPushButton("Actualizar")
+        self._btn_refresh.clicked.connect(self.cargar_datos)
+        header.addWidget(self._btn_refresh)
+        layout.addLayout(header)
+
+        self._estado = QLabel()
+        self._estado.setWordWrap(True)
+        layout.addWidget(self._estado)
+
+        self._headers = [
+            "ID", "Proyecto", "Tracker", "Estado", "Prioridad",
+            "Asignado a", "Sector", "Gerencia", "Origen", "Subject", "Actualizado"
+        ]
+        self._tabla = QTableWidget(0, len(self._headers))
+        self._tabla.setHorizontalHeaderLabels(self._headers)
+        self._tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._tabla.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self._tabla.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self._tabla)
+
+        self.cargar_datos()
+
+    def cargar_datos(self):
+        self._btn_refresh.setEnabled(False)
+        self._estado.setText("Cargando tickets desde Redmine…")
+        QApplication.processEvents()
+
+        usuario, clave = self._credentials
+        try:
+            respuesta = requests.get(
+                REDMINE_ISSUES_URL,
+                auth=HTTPBasicAuth(usuario, clave),
+                timeout=15,
+                verify=False,
+            )
+            respuesta.raise_for_status()
+            data = respuesta.json()
+            issues = data.get("issues", []) or []
+        except (RequestException, ValueError) as exc:
+            self._tabla.setRowCount(0)
+            self._estado.setText(f"Error al obtener tickets: {exc}")
+            self._btn_refresh.setEnabled(True)
+            return
+
+        self._tabla.setRowCount(len(issues))
+
+        def buscar_custom_field(campos, nombre):
+            for campo in campos or []:
+                if campo.get("name") == nombre:
+                    valor = campo.get("value")
+                    if isinstance(valor, list):
+                        return ", ".join(valor)
+                    return valor or ""
+            return ""
+
+        for fila, issue in enumerate(issues):
+            custom_fields = issue.get("custom_fields")
+            valores = [
+                issue.get("id", ""),
+                issue.get("project", {}).get("name", ""),
+                issue.get("tracker", {}).get("name", ""),
+                issue.get("status", {}).get("name", ""),
+                issue.get("priority", {}).get("name", ""),
+                issue.get("assigned_to", {}).get("name", ""),
+                buscar_custom_field(custom_fields, "Sector"),
+                buscar_custom_field(custom_fields, "Gerencia"),
+                buscar_custom_field(custom_fields, "Origen"),
+                issue.get("subject", ""),
+                issue.get("updated_on", ""),
+            ]
+            for col, valor in enumerate(valores):
+                item = QTableWidgetItem(str(valor))
+                if self._headers[col] == "ID":
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self._tabla.setItem(fila, col, item)
+
+        self._estado.setText(f"Tickets cargados: {len(issues)}")
+        self._btn_refresh.setEnabled(True)
+
+
+class VistaActividadUsuario(QWidget):
+    _COLUMNAS = ["ID", "Proyecto", "Estado", "Prioridad", "Subject", "Actualizado"]
+
+    def __init__(self, credentials: Tuple[str, str]):
+        super().__init__()
+        self._credentials = credentials
+
+        layout = QVBoxLayout(self)
+        header = QHBoxLayout()
+        header.addWidget(QLabel("<b>Actividad por usuario</b>"))
+        header.addStretch()
+        layout.addLayout(header)
+
+        form = QHBoxLayout()
+        self._entrada_usuario = QLineEdit()
+        self._entrada_usuario.setPlaceholderText("Ingresá ID numérico o usuario de Redmine")
+        form.addWidget(self._entrada_usuario)
+
+        self._btn_buscar = QPushButton("Buscar")
+        self._btn_buscar.clicked.connect(self.buscar_usuario)
+        form.addWidget(self._btn_buscar)
+        layout.addLayout(form)
+
+        self._estado = QLabel("Ingresá un usuario y presioná Buscar.")
+        self._estado.setWordWrap(True)
+        layout.addWidget(self._estado)
+
+        self._tablas_por_estado = {
+            "progreso": self._crear_tabla("Tickets en progreso"),
+            "pruebas": self._crear_tabla("Tickets en pruebas"),
+            "rtd": self._crear_tabla("Tickets en RTD"),
+        }
+        for tabla in self._tablas_por_estado.values():
+            layout.addWidget(tabla["contenedor"])
+
+    def _crear_tabla(self, titulo: str):
+        contenedor = QWidget()
+        contenedor_layout = QVBoxLayout(contenedor)
+        contenedor_layout.setContentsMargins(0, 12, 0, 0)
+        contenedor_layout.addWidget(QLabel(f"<b>{titulo}</b>"))
+        tabla = QTableWidget(0, len(self._COLUMNAS))
+        tabla.setHorizontalHeaderLabels(self._COLUMNAS)
+        tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        tabla.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        tabla.horizontalHeader().setStretchLastSection(True)
+        contenedor_layout.addWidget(tabla)
+        return {"contenedor": contenedor, "tabla": tabla}
+
+    def buscar_usuario(self):
+        identificador = self._entrada_usuario.text().strip()
+        if not identificador:
+            QMessageBox.warning(self, "Dato requerido", "Ingresá un ID o usuario de Redmine.")
+            return
+
+        self._btn_buscar.setEnabled(False)
+        self._estado.setText("Buscando información del usuario…")
+        QApplication.processEvents()
+
+        try:
+            usuario_id, usuario_nombre = resolver_usuario(self._credentials, identificador)
+            if usuario_id is None:
+                self._estado.setText("No se encontró el usuario especificado.")
+                self._limpiar_tablas()
+                self._btn_buscar.setEnabled(True)
+                return
+
+            issues = self._obtener_tickets_usuario(usuario_id)
+        except (RequestException, ValueError) as exc:
+            self._estado.setText(f"Error consultando Redmine: {exc}")
+            self._limpiar_tablas()
+            self._btn_buscar.setEnabled(True)
+            return
+
+        categorias = {
+            "progreso": [],
+            "pruebas": [],
+            "rtd": [],
+        }
+
+        estados_categorias = {
+            2: "progreso",  # En progreso
+            4: "pruebas",   # En pruebas
+            3: "rtd",       # RTD
+        }
+
+        for issue in issues:
+            status_info = issue.get("status") or {}
+            estado_id = status_info.get("id")
+            categoria = estados_categorias.get(estado_id)
+            if categoria:
+                categorias[categoria].append(issue)
+
+        for clave, items in categorias.items():
+            tabla = self._tablas_por_estado[clave]["tabla"]
+            tabla.setRowCount(len(items))
+            for fila, issue in enumerate(items):
+                valores = [
+                    issue.get("id", ""),
+                    (issue.get("project", {}) or {}).get("name", ""),
+                    (issue.get("status", {}) or {}).get("name", ""),
+                    (issue.get("priority", {}) or {}).get("name", ""),
+                    issue.get("subject", ""),
+                    issue.get("updated_on", ""),
+                ]
+                for columna, valor in enumerate(valores):
+                    item = QTableWidgetItem(str(valor))
+                    if self._COLUMNAS[columna] == "ID":
+                        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    tabla.setItem(fila, columna, item)
+            if not items:
+                tabla.setRowCount(0)
+
+        total = sum(len(items) for items in categorias.values())
+        self._estado.setText(
+            f"Usuario: {usuario_nombre} (ID {usuario_id}). Tickets analizados: {total}."
+        )
+        self._btn_buscar.setEnabled(True)
+
+    def _limpiar_tablas(self):
+        for tabla in self._tablas_por_estado.values():
+            tabla["tabla"].setRowCount(0)
+
+    def _obtener_tickets_usuario(self, usuario_id: int):
+        usuario, clave = self._credentials
+        issues = []
+        offset = 0
+        limit = 100
+
+        while True:
+            respuesta = requests.get(
+                REDMINE_ISSUES_SEARCH_URL,
+                params={
+                    "assigned_to_id": usuario_id,
+                    "status_id": "*",
+                    "limit": limit,
+                    "offset": offset,
+                },
+                auth=HTTPBasicAuth(usuario, clave),
+                timeout=15,
+                verify=False,
+            )
+            respuesta.raise_for_status()
+            data = respuesta.json() or {}
+            lote = data.get("issues", []) or []
+            issues.extend(lote)
+
+            total = data.get("total_count", len(issues))
+            offset += limit
+
+            if offset >= total or not lote:
+                break
+
+        return issues
+
+
+class VistaHorasCargadas(QWidget):
+    def __init__(self, credentials: Tuple[str, str]):
+        super().__init__()
+        self._credentials = credentials
+
+        layout = QVBoxLayout(self)
+        header = QHBoxLayout()
+        header.addWidget(QLabel("<b>Horas cargadas</b>"))
+        header.addStretch()
+        layout.addLayout(header)
+
+        form = QHBoxLayout()
+        self._entrada_usuario = QLineEdit()
+        self._entrada_usuario.setPlaceholderText("Ingresá ID numérico o usuario de Redmine")
+        form.addWidget(self._entrada_usuario)
+
+        self._btn_buscar = QPushButton("Buscar")
+        self._btn_buscar.clicked.connect(self.buscar_usuario)
+        form.addWidget(self._btn_buscar)
+        layout.addLayout(form)
+
+        self._estado = QLabel("Ingresá un usuario y presioná Buscar.")
+        self._estado.setWordWrap(True)
+        layout.addWidget(self._estado)
+
+        self._tablas = {
+            "actual": self._crear_tabla("Mes en curso"),
+            "anterior": self._crear_tabla("Mes anterior"),
+        }
+
+        layout.addWidget(self._tablas["actual"]["contenedor"])
+        layout.addWidget(self._tablas["anterior"]["contenedor"])
+
+    def _crear_tabla(self, titulo: str):
+        contenedor = QWidget()
+        contenedor_layout = QVBoxLayout(contenedor)
+        contenedor_layout.setContentsMargins(0, 12, 0, 0)
+        contenedor_layout.addWidget(QLabel(f"<b>{titulo}</b>"))
+        tabla = QTableWidget(0, 0)
+        tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        tabla.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        tabla.horizontalHeader().setDefaultSectionSize(60)
+        tabla.horizontalHeader().setMinimumSectionSize(40)
+        tabla.verticalHeader().setVisible(True)
+        contenedor_layout.addWidget(tabla)
+        return {"contenedor": contenedor, "tabla": tabla}
+
+    def buscar_usuario(self):
+        identificador = self._entrada_usuario.text().strip()
+        if not identificador:
+            QMessageBox.warning(self, "Dato requerido", "Ingresá un ID o usuario de Redmine.")
+            return
+
+        self._btn_buscar.setEnabled(False)
+        self._estado.setText("Buscando horas cargadas…")
+        QApplication.processEvents()
+
+        try:
+            usuario_id, usuario_nombre = resolver_usuario(self._credentials, identificador)
+            if usuario_id is None:
+                self._estado.setText("No se encontró el usuario especificado.")
+                self._limpiar_tablas()
+                self._btn_buscar.setEnabled(True)
+                return
+
+            rango_anterior, rango_actual = self._calcular_rangos()
+            horas_anterior = self._obtener_horas_por_dia(usuario_id, *rango_anterior)
+            horas_actual = self._obtener_horas_por_dia(usuario_id, *rango_actual)
+        except (RequestException, ValueError) as exc:
+            self._estado.setText(f"Error consultando Redmine: {exc}")
+            self._limpiar_tablas()
+            self._btn_buscar.setEnabled(True)
+            return
+
+        total_anterior = sum(horas for _, horas, _ in horas_anterior)
+        total_actual = sum(horas for _, horas, _ in horas_actual)
+
+        self._cargar_tabla(self._tablas["anterior"]["tabla"], horas_anterior)
+        self._cargar_tabla(self._tablas["actual"]["tabla"], horas_actual)
+
+        self._estado.setText(
+            (
+                f"Usuario: {usuario_nombre} (ID {usuario_id}). "
+                f"Mes anterior: {total_anterior:.2f} h en {len(horas_anterior)} días. "
+                f"Mes en curso: {total_actual:.2f} h en {len(horas_actual)} días."
+            )
+        )
+        self._btn_buscar.setEnabled(True)
+
+    def _cargar_tabla(self, tabla: QTableWidget, datos):
+        if not datos:
+            tabla.clearContents()
+            tabla.setRowCount(0)
+            tabla.setColumnCount(0)
+            tabla.setHorizontalHeaderLabels([])
+            return
+
+        tabla.clearContents()
+        tabla.setRowCount(1)
+        tabla.setColumnCount(len(datos))
+        encabezados = []
+        for columna, (fecha, horas, es_fin_de_semana) in enumerate(datos):
+            encabezados.append(str(fecha.day))
+            item = QTableWidgetItem(f"{horas:.2f}")
+            item.setTextAlignment(Qt.AlignCenter)
+            if horas < 8 and not es_fin_de_semana:
+                item.setBackground(QColor(255, 200, 200))
+            elif es_fin_de_semana:
+                item.setBackground(QColor(235, 235, 235))
+            tabla.setItem(0, columna, item)
+
+        tabla.setHorizontalHeaderLabels(encabezados)
+        tabla.setVerticalHeaderLabels(["Horas"])
+
+    def _limpiar_tablas(self):
+        for tabla in self._tablas.values():
+            tabla_widget = tabla["tabla"]
+            tabla_widget.clearContents()
+            tabla_widget.setRowCount(0)
+            tabla_widget.setColumnCount(0)
+            tabla_widget.setHorizontalHeaderLabels([])
+
+    def _calcular_rangos(self):
+        hoy = date.today()
+        inicio_actual = hoy.replace(day=1)
+        ultimo_dia_actual = calendar.monthrange(inicio_actual.year, inicio_actual.month)[1]
+        fin_actual = inicio_actual.replace(day=ultimo_dia_actual)
+
+        fin_anterior = inicio_actual - timedelta(days=1)
+        inicio_anterior = fin_anterior.replace(day=1)
+
+        ultimo_dia_anterior = calendar.monthrange(inicio_anterior.year, inicio_anterior.month)[1]
+        fin_anterior = inicio_anterior.replace(day=ultimo_dia_anterior)
+
+        return (inicio_anterior, fin_anterior), (inicio_actual, fin_actual)
+
+    def _obtener_horas_por_dia(self, usuario_id: int, fecha_desde: date, fecha_hasta: date):
+        entradas = obtener_time_entries(self._credentials, usuario_id, fecha_desde, fecha_hasta)
+        totales = defaultdict(float)
+        for entrada in entradas:
+            dia = entrada.get("spent_on")
+            horas = entrada.get("hours", 0)
+            if not dia:
+                continue
+            try:
+                totales[dia] += float(horas or 0)
+            except (TypeError, ValueError):
+                continue
+
+        dias = []
+        actual = fecha_desde
+        while actual <= fecha_hasta:
+            clave = actual.isoformat()
+            horas = totales.get(clave, 0.0)
+            es_fin_de_semana = actual.weekday() >= 5
+            dias.append((actual, horas, es_fin_de_semana))
+            actual += timedelta(days=1)
+
+        return dias
 
 
 # --- Ventana Principal ---
 class VentanaPrincipal(QMainWindow):
-    def __init__(self):
+    def __init__(self, credentials: Tuple[str, str]):
         super().__init__()
-        self.setWindowTitle("Demo PySide6 - Menú + Formulario + Tabla + Issues")
+        self.setWindowTitle("Tickets de soporte")
         self.resize(1000, 650)
+        self._credentials = credentials
 
-        # ----- Crear pestañas -----
         self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.tabs.setMovable(True)
-
-        vistas = [
-            ("Inicio", VistaInicio()),
-            # PESTAÑA 2: acá metemos la tabla desde el JSON
-            ("Tickets RTD", VistaIssues(ISSUES_JSON)),
-            ("Carga de horas", VistaPlaceholder("Formas", "Rectángulos, círculos, flechas.")),
-            ("Corrector de tickets", VistaPlaceholder("Texto", "Cajas de texto, tipografías.")),
-            ("Tickets de soporte", VistaPlaceholder("Selección", "Seleccionar, mover, transformar.")),
-            ("Colores", VistaPlaceholder("Colores", "Paletas, cuentagotas.")),
-            ("Efectos", VistaPlaceholder("Efectos", "Filtros y ajustes rápidos.")),
-            ("Capas", VistaPlaceholder("Capas", "Organiza elementos por capas.")),
-            ("Historial", VistaPlaceholder("Historial", "Deshacer/rehacer y snapshots.")),
-            ("Configuración", VistaPlaceholder("Configuración", "Preferencias de la aplicación."))
-        ]
-        for nombre, widget in vistas:
-            self.tabs.addTab(widget, nombre)
+        self.tabs.addTab(VistaTicketsSoporte(self._credentials), "Tickets de soporte")
+        self.tabs.addTab(VistaActividadUsuario(self._credentials), "Actividad usuario")
+        self.tabs.addTab(VistaHorasCargadas(self._credentials), "Horas cargadas")
         self.setCentralWidget(self.tabs)
-
-        # ----- Menús, barra, estado -----
-        self._crear_menus()
-        self._crear_toolbar()
-        self.status = QStatusBar()
-        self.setStatusBar(self.status)
-        self.status.showMessage("Listo")
-        QApplication.setStyle(QStyleFactory.create("Fusion"))
-
-    # ====== Menús ======
-    def _crear_menus(self):
-        menubar = self.menuBar()
-
-        # Archivo
-        m_archivo = menubar.addMenu("&Archivo")
-        act_nuevo = QAction(self.style().standardIcon(QStyle.SP_FileIcon), "Nuevo", self)
-        act_nuevo.setShortcut("Ctrl+N")
-        act_nuevo.triggered.connect(self.accion_nuevo)
-
-        act_abrir = QAction(self.style().standardIcon(QStyle.SP_DialogOpenButton), "Abrir…", self)
-        act_abrir.setShortcut("Ctrl+O")
-        act_abrir.triggered.connect(self.accion_abrir)
-
-        act_guardar = QAction(self.style().standardIcon(QStyle.SP_DialogSaveButton), "Guardar", self)
-        act_guardar.setShortcut("Ctrl+S")
-        act_guardar.triggered.connect(self.accion_guardar)
-
-        m_archivo.addAction(act_nuevo)
-        m_archivo.addAction(act_abrir)
-        m_archivo.addAction(act_guardar)
-        m_archivo.addSeparator()
-        m_archivo.addAction("Salir", self.close)
-
-        # Editar
-        m_editar = menubar.addMenu("&Editar")
-        for texto, sc in [("Deshacer", "Ctrl+Z"), ("Rehacer", "Ctrl+Y"),
-                          ("Copiar", "Ctrl+C"), ("Pegar", "Ctrl+V")]:
-            act = QAction(texto, self)
-            act.setShortcut(sc)
-            act.triggered.connect(self._accion_stub)
-            m_editar.addAction(act)
-
-        # Ver
-        m_ver = menubar.addMenu("&Ver")
-        self.act_toggle_toolbar = QAction("Mostrar barra de herramientas", self, checkable=True, checked=True)
-        self.act_toggle_toolbar.triggered.connect(self._toggle_toolbar)
-        self.act_toggle_status = QAction("Mostrar barra de estado", self, checkable=True, checked=True)
-        self.act_toggle_status.triggered.connect(self._toggle_status)
-        m_ver.addAction(self.act_toggle_toolbar)
-        m_ver.addAction(self.act_toggle_status)
-
-        # Ayuda
-        m_ayuda = menubar.addMenu("Ay&uda")
-        act_acerca = QAction("Acerca de…", self)
-        act_acerca.triggered.connect(self.accion_acerca_de)
-        m_ayuda.addAction(act_acerca)
-
-        self.act_nuevo = act_nuevo
-        self.act_abrir = act_abrir
-        self.act_guardar = act_guardar
-
-    # ====== Toolbar ======
-    def _crear_toolbar(self):
-        tb = QToolBar("Acceso rápido", self)
-        tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.addToolBar(Qt.TopToolBarArea, tb)
-        tb.addAction(self.act_nuevo)
-        tb.addAction(self.act_abrir)
-        tb.addAction(self.act_guardar)
-        self.toolbar = tb
-
-    # ====== Acciones y helpers ======
-    def _toggle_toolbar(self, checked): self.toolbar.setVisible(checked)
-    def _toggle_status(self, checked): self.statusBar().setVisible(checked)
-    def _accion_stub(self): self.status.showMessage("Acción demo", 2000)
-
-    def accion_nuevo(self):
-        QMessageBox.information(self, "Nuevo", "Crear un nuevo documento.")
-
-    def accion_abrir(self):
-        ruta, _ = QFileDialog.getOpenFileName(self, "Abrir", "", "Proyecto (*.pnt);;Todos (*.*)")
-        if ruta:
-            QMessageBox.information(self, "Abrir", f"Abriste:\n{ruta}")
-
-    def accion_guardar(self):
-        ruta, _ = QFileDialog.getSaveFileName(self, "Guardar", "proyecto.pnt", "Proyecto (*.pnt)")
-        if ruta:
-            QMessageBox.information(self, "Guardar", f"Guardado en:\n{ruta}")
-
-    def accion_acerca_de(self):
-        QMessageBox.information(
-            self, "Acerca de",
-            "Demo PySide6\nMenú tipo Paint + Formulario + Tabla + Issues (JSON)."
-        )
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    win = VentanaPrincipal()
+    dlg = CredencialesDialog()
+    if dlg.exec() != QDialog.Accepted:
+        sys.exit(0)
+
+    credenciales = dlg.get_credentials()
+    win = VentanaPrincipal(credenciales)
     win.show()
     sys.exit(app.exec())
