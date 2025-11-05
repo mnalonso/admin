@@ -15,12 +15,12 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QDialog,
     QDialogButtonBox,
-    QGridLayout,
+    QAbstractItemView,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont
 import sys
-from typing import Tuple
+from typing import List, Tuple
 from collections import defaultdict
 from datetime import date, timedelta
 import calendar
@@ -41,6 +41,57 @@ REDMINE_USERS_URL = f"{REDMINE_BASE_URL}/users.json"
 REDMINE_USER_DETAIL_URL = f"{REDMINE_BASE_URL}/users/{{user_id}}.json"
 REDMINE_ISSUES_SEARCH_URL = f"{REDMINE_BASE_URL}/issues.json"
 REDMINE_TIME_ENTRIES_URL = f"{REDMINE_BASE_URL}/time_entries.json"
+
+
+def formatear_horas(valor: float) -> str:
+    minutos_totales = int(round(valor * 60))
+    horas = minutos_totales // 60
+    minutos = minutos_totales % 60
+    return f"{horas}:{minutos:02d}"
+
+
+def calcular_rangos_meses():
+    hoy = date.today()
+    inicio_actual = hoy.replace(day=1)
+    ultimo_dia_actual = calendar.monthrange(inicio_actual.year, inicio_actual.month)[1]
+    fin_actual = inicio_actual.replace(day=ultimo_dia_actual)
+
+    fin_anterior = inicio_actual - timedelta(days=1)
+    inicio_anterior = fin_anterior.replace(day=1)
+    ultimo_dia_anterior = calendar.monthrange(inicio_anterior.year, inicio_anterior.month)[1]
+    fin_anterior = inicio_anterior.replace(day=ultimo_dia_anterior)
+
+    return (inicio_anterior, fin_anterior), (inicio_actual, fin_actual)
+
+
+def obtener_horas_por_dia(
+    credentials: Tuple[str, str],
+    usuario_id: int,
+    fecha_desde: date,
+    fecha_hasta: date,
+):
+    entradas = obtener_time_entries(credentials, usuario_id, fecha_desde, fecha_hasta)
+    totales = defaultdict(float)
+    for entrada in entradas:
+        dia = entrada.get("spent_on")
+        horas = entrada.get("hours", 0)
+        if not dia:
+            continue
+        try:
+            totales[dia] += float(horas or 0)
+        except (TypeError, ValueError):
+            continue
+
+    dias = []
+    actual = fecha_desde
+    while actual <= fecha_hasta:
+        clave = actual.isoformat()
+        horas = totales.get(clave, 0.0)
+        es_fin_de_semana = actual.weekday() >= 5
+        dias.append((actual, horas, es_fin_de_semana))
+        actual += timedelta(days=1)
+
+    return dias
 
 
 def resolver_usuario(credentials: Tuple[str, str], identificador: str) -> Tuple[int | None, str | None]:
@@ -421,9 +472,9 @@ class HorasPanel(QWidget):
             tabla_widget.setHorizontalHeaderLabels([])
 
     def mostrar_para_usuario(self, usuario_id: int):
-        rango_anterior, rango_actual = self._calcular_rangos()
-        horas_anterior = self._obtener_horas_por_dia(usuario_id, *rango_anterior)
-        horas_actual = self._obtener_horas_por_dia(usuario_id, *rango_actual)
+        rango_anterior, rango_actual = calcular_rangos_meses()
+        horas_anterior = obtener_horas_por_dia(self._credentials, usuario_id, *rango_anterior)
+        horas_actual = obtener_horas_por_dia(self._credentials, usuario_id, *rango_actual)
 
         self._cargar_tabla(self._tablas["anterior"]["tabla"], horas_anterior)
         self._cargar_tabla(self._tablas["actual"]["tabla"], horas_actual)
@@ -477,44 +528,6 @@ class HorasPanel(QWidget):
 
         tabla.setHorizontalHeaderLabels(encabezados)
         tabla.setVerticalHeaderLabels(["Horas"])
-
-    def _calcular_rangos(self):
-        hoy = date.today()
-        inicio_actual = hoy.replace(day=1)
-        ultimo_dia_actual = calendar.monthrange(inicio_actual.year, inicio_actual.month)[1]
-        fin_actual = inicio_actual.replace(day=ultimo_dia_actual)
-
-        fin_anterior = inicio_actual - timedelta(days=1)
-        inicio_anterior = fin_anterior.replace(day=1)
-
-        ultimo_dia_anterior = calendar.monthrange(inicio_anterior.year, inicio_anterior.month)[1]
-        fin_anterior = inicio_anterior.replace(day=ultimo_dia_anterior)
-
-        return (inicio_anterior, fin_anterior), (inicio_actual, fin_actual)
-
-    def _obtener_horas_por_dia(self, usuario_id: int, fecha_desde: date, fecha_hasta: date):
-        entradas = obtener_time_entries(self._credentials, usuario_id, fecha_desde, fecha_hasta)
-        totales = defaultdict(float)
-        for entrada in entradas:
-            dia = entrada.get("spent_on")
-            horas = entrada.get("hours", 0)
-            if not dia:
-                continue
-            try:
-                totales[dia] += float(horas or 0)
-            except (TypeError, ValueError):
-                continue
-
-        dias = []
-        actual = fecha_desde
-        while actual <= fecha_hasta:
-            clave = actual.isoformat()
-            horas = totales.get(clave, 0.0)
-            es_fin_de_semana = actual.weekday() >= 5
-            dias.append((actual, horas, es_fin_de_semana))
-            actual += timedelta(days=1)
-
-        return dias
 
 
 class VistaHorasCargadas(QWidget):
@@ -594,8 +607,6 @@ class VistaHorasTeam(QWidget):
         "afontana",
     ]
 
-    _COLUMNAS = 3
-
     def __init__(self, credentials: Tuple[str, str]):
         super().__init__()
         self._credentials = credentials
@@ -615,45 +626,16 @@ class VistaHorasTeam(QWidget):
         self._estado.setWordWrap(True)
         layout.addWidget(self._estado)
 
-        self._contenedor_usuarios = QWidget()
-        self._grid = QGridLayout(self._contenedor_usuarios)
-        self._grid.setSpacing(16)
-        self._usuarios = []
-
-        for indice, login in enumerate(self._USUARIOS):
-            fila = indice // self._COLUMNAS
-            columna = indice % self._COLUMNAS
-            info_usuario = self._crear_panel_usuario(login)
-            self._usuarios.append(info_usuario)
-            self._grid.addWidget(info_usuario["widget"], fila, columna)
-
-        layout.addWidget(self._contenedor_usuarios)
-
-        if self._usuarios:
-            self._consultar_todos()
-
-    def _crear_panel_usuario(self, login: str):
-        widget = QWidget()
-        contenedor = QVBoxLayout(widget)
-        contenedor.setContentsMargins(0, 0, 0, 0)
-        titulo = QLabel(f"<b>{login}</b>")
-        titulo.setWordWrap(True)
-        contenedor.addWidget(titulo)
-
-        estado = QLabel("Listo para consultar.")
-        estado.setWordWrap(True)
-        contenedor.addWidget(estado)
-
-        panel = HorasPanel(self._credentials)
-        contenedor.addWidget(panel)
-
-        return {
-            "login": login,
-            "widget": widget,
-            "titulo": titulo,
-            "estado": estado,
-            "panel": panel,
+        self._tablas = {
+            "actual": self._crear_tabla("Mes en curso"),
+            "anterior": self._crear_tabla("Mes anterior"),
         }
+
+        layout.addWidget(self._tablas["actual"]["contenedor"])
+        layout.addWidget(self._tablas["anterior"]["contenedor"])
+
+        if self._USUARIOS:
+            self._consultar_todos()
 
     def _consultar_todos(self):
         if self._cargando:
@@ -663,14 +645,16 @@ class VistaHorasTeam(QWidget):
         self._estado.setText("Buscando horas cargadas del equipo…")
         QApplication.processEvents()
 
+        for tabla in self._tablas.values():
+            self._limpiar_tabla(tabla["tabla"])
+
         errores: list[str] = []
+        usuarios_datos: list[dict] = []
 
-        for info in self._usuarios:
-            login = info["login"]
-            estado = info["estado"]
-            estado.setText("Consultando…")
+        rango_anterior, rango_actual = calcular_rangos_meses()
+
+        for login in self._USUARIOS:
             QApplication.processEvents()
-
             try:
                 if login in self._cache_usuarios:
                     usuario_id, nombre_cache = self._cache_usuarios[login]
@@ -680,27 +664,46 @@ class VistaHorasTeam(QWidget):
                         raise ValueError("No se encontró el usuario especificado en Redmine.")
                     self._cache_usuarios[login] = (usuario_id, nombre_cache)
 
-                resumen = info["panel"].mostrar_para_usuario(usuario_id)
+                horas_anterior = obtener_horas_por_dia(
+                    self._credentials, usuario_id, *rango_anterior
+                )
+                horas_actual = obtener_horas_por_dia(
+                    self._credentials, usuario_id, *rango_actual
+                )
+
             except (RequestException, ValueError) as exc:
-                info["panel"].limpiar()
-                estado.setText(f"Error consultando Redmine: {exc}")
-                errores.append(login)
+                errores.append(f"{login}: {exc}")
+                usuarios_datos.append(
+                    {
+                        "login": login,
+                        "id": None,
+                        "nombre": login,
+                        "datos": None,
+                    }
+                )
             else:
-                nombre_visible = nombre_cache or login
-                info["titulo"].setText(
-                    f"<b>{nombre_visible}</b> <span style='color: #666;'>({login})</span>"
+                usuarios_datos.append(
+                    {
+                        "login": login,
+                        "id": usuario_id,
+                        "nombre": nombre_cache or login,
+                        "datos": {
+                            "anterior": horas_anterior,
+                            "actual": horas_actual,
+                        },
+                    }
                 )
-                estado.setText(
-                    (
-                        f"ID {usuario_id}. Mes anterior: {resumen['anterior_total']:.2f} h en "
-                        f"{resumen['anterior_dias']} días. Mes en curso: {resumen['actual_total']:.2f} h en "
-                        f"{resumen['actual_dias']} días."
-                    )
-                )
+
+        self._cargar_tabla_equipo(
+            self._tablas["anterior"]["tabla"], usuarios_datos, rango_anterior, "anterior"
+        )
+        self._cargar_tabla_equipo(
+            self._tablas["actual"]["tabla"], usuarios_datos, rango_actual, "actual"
+        )
 
         if errores:
             self._estado.setText(
-                "No se pudieron actualizar todos los usuarios: " + ", ".join(errores)
+                "Actualizado con errores: " + "; ".join(errores)
             )
         else:
             self._estado.setText("Horas actualizadas para todo el equipo.")
@@ -710,6 +713,112 @@ class VistaHorasTeam(QWidget):
     def _establecer_cargando(self, cargando: bool):
         self._cargando = cargando
         self._btn_actualizar.setEnabled(not cargando)
+
+    def _crear_tabla(self, titulo: str):
+        contenedor = QWidget()
+        contenedor_layout = QVBoxLayout(contenedor)
+        contenedor_layout.setContentsMargins(0, 12, 0, 0)
+        contenedor_layout.addWidget(QLabel(f"<b>{titulo}</b>"))
+
+        tabla = QTableWidget(0, 0)
+        tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        tabla.setSelectionMode(QAbstractItemView.NoSelection)
+        tabla.setSelectionBehavior(QAbstractItemView.SelectItems)
+        tabla.verticalHeader().setVisible(False)
+        tabla.horizontalHeader().setStretchLastSection(False)
+        tabla.horizontalHeader().setSectionsMovable(False)
+
+        contenedor_layout.addWidget(tabla)
+        return {"contenedor": contenedor, "tabla": tabla}
+
+    def _limpiar_tabla(self, tabla: QTableWidget):
+        tabla.clearContents()
+        tabla.setRowCount(0)
+        tabla.setColumnCount(0)
+        tabla.setHorizontalHeaderLabels([])
+
+    def _cargar_tabla_equipo(
+        self,
+        tabla: QTableWidget,
+        usuarios_datos: List[dict],
+        rango: Tuple[date, date],
+        clave: str,
+    ):
+        self._limpiar_tabla(tabla)
+
+        inicio, fin = rango
+        dias = []
+        actual = inicio
+        while actual <= fin:
+            dias.append(actual)
+            actual += timedelta(days=1)
+
+        if not usuarios_datos or not dias:
+            return
+
+        filas = len(usuarios_datos) + 1
+        columnas = len(dias) + 1
+        tabla.setRowCount(filas)
+        tabla.setColumnCount(columnas)
+
+        encabezados = ["Usuario"] + [str(dia.day) for dia in dias]
+        tabla.setHorizontalHeaderLabels(encabezados)
+
+        header = tabla.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Fixed)
+        header.setDefaultSectionSize(42)
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+
+        tabla.verticalHeader().setDefaultSectionSize(28)
+
+        totales_por_dia = [0.0 for _ in dias]
+
+        fuente_total = QFont()
+        fuente_total.setBold(True)
+
+        for fila, info in enumerate(usuarios_datos):
+            nombre = info.get("nombre") or info.get("login")
+            login = info.get("login")
+            item_usuario = QTableWidgetItem(f"{nombre} ({login})")
+            tabla.setItem(fila, 0, item_usuario)
+
+            datos_usuario = info.get("datos")
+            if not datos_usuario or clave not in datos_usuario:
+                item_usuario.setForeground(QColor(200, 0, 0))
+                continue
+
+            horas_por_dia = {dato[0]: (dato[1], dato[2]) for dato in datos_usuario[clave]}
+
+            for indice, dia in enumerate(dias, start=1):
+                horas, es_fin = horas_por_dia.get(
+                    dia, (0.0, dia.weekday() >= 5)
+                )
+                item = QTableWidgetItem(formatear_horas(horas))
+                item.setTextAlignment(Qt.AlignCenter)
+                if es_fin:
+                    item.setBackground(QColor(235, 235, 235))
+                elif horas < 8:
+                    item.setBackground(QColor(255, 200, 200))
+                tabla.setItem(fila, indice, item)
+                totales_por_dia[indice - 1] += horas
+
+        fila_total = filas - 1
+        item_total = QTableWidgetItem("Total")
+        item_total.setFont(fuente_total)
+        tabla.setItem(fila_total, 0, item_total)
+
+        for indice, dia in enumerate(dias, start=1):
+            horas_totales = totales_por_dia[indice - 1]
+            item = QTableWidgetItem(formatear_horas(horas_totales))
+            item.setTextAlignment(Qt.AlignCenter)
+            item.setFont(fuente_total)
+            if dia.weekday() >= 5:
+                item.setBackground(QColor(235, 235, 235))
+            tabla.setItem(fila_total, indice, item)
+
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for columna in range(1, columnas):
+            header.resizeSection(columna, 42)
 
 
 # --- Ventana Principal ---
