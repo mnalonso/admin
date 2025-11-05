@@ -237,14 +237,18 @@ class VistaActividadUsuario(QWidget):
             "rtd": [],
         }
 
+        estados_categorias = {
+            2: "progreso",  # En progreso
+            4: "pruebas",   # En pruebas
+            3: "rtd",       # RTD
+        }
+
         for issue in issues:
-            estado = (issue.get("status", {}) or {}).get("name", "").lower()
-            if "progreso" in estado:
-                categorias["progreso"].append(issue)
-            elif "prueba" in estado:
-                categorias["pruebas"].append(issue)
-            elif "rtd" in estado or "ready" in estado:
-                categorias["rtd"].append(issue)
+            status_info = issue.get("status") or {}
+            estado_id = status_info.get("id")
+            categoria = estados_categorias.get(estado_id)
+            if categoria:
+                categorias[categoria].append(issue)
 
         for clave, items in categorias.items():
             tabla = self._tablas_por_estado[clave]["tabla"]
