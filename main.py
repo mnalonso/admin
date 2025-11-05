@@ -16,46 +16,6 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-
-# ====== JSON embebido (tu ejemplo) ======
-ISSUES_JSON = {
-    "issues": [
-        {
-            "id": 12881,
-            "project": {"id": 42, "name": "PIN - Desarrollo"},
-            "tracker": {"id": 7, "name": "Historia"},
-            "status": {"id": 3, "name": "RTD", "is_closed": False},
-            "priority": {"id": 1, "name": "Baja"},
-            "author": {"id": 172, "name": "Florencia Galarza"},
-            "assigned_to": {"id": 211, "name": "Jean Pierre Chero Pomaleque"},
-            "category": {"id": 42, "name": "WEB"},
-            "fixed_version": {"id": 107, "name": "SPR 129"},
-            "subject": "Diferencias entre mobile y desktop  - carrito paso 3",
-            "description": "<p>Buenas!&nbsp;</p>\r\n\r\n<p>Me aviso Matias Mainini que desde el celu no puede elegir la opci\u00f3n de \u00a8otras condiciones\u00a8 dentro de las formas de pago<br />\r\n<br />\r\n![Imagen](img_66e091d53a5f7.png)</p>\r\n\r\n<p>![Imagen](img_66e091d546321.png)</p>",
-            "start_date": "2025-07-23",
-            "due_date": "2025-08-07",
-            "done_ratio": 0,
-            "is_private": False,
-            "estimated_hours": 16,
-            "total_estimated_hours": 16,
-            "spent_hours": 15.083333253860474,
-            "total_spent_hours": 15.083333253860474,
-            "custom_fields": [
-                {"id": 18, "name": "Sector", "value": "Productos Digitales"},
-                {"id": 31, "name": "Gerencia", "value": "Planeamiento Comercial"},
-                {"id": 33, "name": "Analista", "multiple": True, "value": ["Mariana Peralta"]},
-                {"id": 59, "name": "Origen", "value": ""}
-            ],
-            "created_on": "2024-09-10T18:37:09Z",
-            "updated_on": "2025-10-23T17:38:13Z",
-            "closed_on": None
-        }
-    ],
-    "total_count": 1,
-    "offset": 0,
-    "limit": 25
-}
-
 REDMINE_ISSUES_URL = (
     "https://redmine.famiq.com.ar/projects/ipin/issues.json?query_id=77&"
     "sort=priority%3Adesc%2Cupdated_on%3Adesc"
@@ -135,63 +95,6 @@ class VistaInicio(QWidget):
             "Formulario enviado",
             f"Nombre: {nombre}\nApellido: {apellido}\nEmail: {email}"
         )
-
-
-# --- Vista 2: tabla desde JSON de issues ---
-class VistaIssues(QWidget):
-    def __init__(self, data: dict):
-        super().__init__()
-        layout = QVBoxLayout(self)
-
-        # Definimos columnas "importantes"
-        headers = [
-            "ID", "Proyecto", "Tracker", "Estado", "Prioridad",
-            "Asignado a", "Versión", "Subject",
-            "Estimado", "Spent", "Inicio", "Vencimiento", "Actualizado"
-        ]
-        table = QTableWidget(0, len(headers))
-        table.setHorizontalHeaderLabels(headers)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        table.horizontalHeader().setStretchLastSection(True)
-
-        issues = data.get("issues", []) or []
-        table.setRowCount(len(issues))
-
-        def g(obj, *path, default=""):
-            cur = obj
-            for p in path:
-                cur = cur.get(p) if isinstance(cur, dict) else None
-                if cur is None:
-                    return default
-            return cur
-
-        for r, it in enumerate(issues):
-            values = [
-                g(it, "id"),
-                g(it, "project", "name"),
-                g(it, "tracker", "name"),
-                g(it, "status", "name"),
-                g(it, "priority", "name"),
-                g(it, "assigned_to", "name"),
-                g(it, "fixed_version", "name"),
-                g(it, "subject"),
-                f"{g(it, 'estimated_hours') or 0:.2f}",
-                f"{g(it, 'spent_hours') or 0:.2f}",
-                g(it, "start_date"),
-                g(it, "due_date"),
-                g(it, "updated_on"),
-            ]
-            for c, val in enumerate(values):
-                item = QTableWidgetItem(str(val))
-                if headers[c] in ("ID", "Estimado", "Spent"):
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                table.setItem(r, c, item)
-
-        layout.addWidget(QLabel("<b>Issues (datos principales)</b>"))
-        layout.addWidget(table)
-        self.table = table
-
 
 class VistaTicketsSoporte(QWidget):
     def __init__(self, credentials: Tuple[str, str]):
@@ -311,8 +214,6 @@ class VentanaPrincipal(QMainWindow):
 
         vistas = [
             ("Inicio", VistaInicio()),
-            # PESTAÑA 2: acá metemos la tabla desde el JSON
-            ("Tickets RTD", VistaIssues(ISSUES_JSON)),
             ("Carga de horas", VistaPlaceholder("Formas", "Rectángulos, círculos, flechas.")),
             ("Corrector de tickets", VistaPlaceholder("Texto", "Cajas de texto, tipografías.")),
             ("Tickets de soporte", VistaTicketsSoporte(self._credentials)),
