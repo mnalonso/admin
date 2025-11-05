@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 import sys
 from typing import Tuple
 from collections import defaultdict
@@ -471,8 +472,8 @@ class VistaHorasCargadas(QWidget):
             self._btn_buscar.setEnabled(True)
             return
 
-        total_anterior = sum(horas for _, horas in horas_anterior)
-        total_actual = sum(horas for _, horas in horas_actual)
+        total_anterior = sum(horas for _, horas, _ in horas_anterior)
+        total_actual = sum(horas for _, horas, _ in horas_actual)
 
         self._cargar_tabla(self._tablas["anterior"]["tabla"], horas_anterior)
         self._cargar_tabla(self._tablas["actual"]["tabla"], horas_actual)
@@ -488,10 +489,14 @@ class VistaHorasCargadas(QWidget):
 
     def _cargar_tabla(self, tabla: QTableWidget, datos):
         tabla.setRowCount(len(datos))
-        for fila, (fecha, horas) in enumerate(datos):
+        for fila, (fecha, horas, es_fin_de_semana) in enumerate(datos):
             item_fecha = QTableWidgetItem(str(fecha))
             item_horas = QTableWidgetItem(f"{horas:.2f}")
             item_horas.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            if horas < 8 and not es_fin_de_semana:
+                color = QColor(255, 200, 200)
+                item_fecha.setBackground(color)
+                item_horas.setBackground(color)
             tabla.setItem(fila, 0, item_fecha)
             tabla.setItem(fila, 1, item_horas)
         if not datos:
@@ -528,7 +533,16 @@ class VistaHorasCargadas(QWidget):
             except (TypeError, ValueError):
                 continue
 
-        return sorted(totales.items())
+        dias = []
+        actual = fecha_desde
+        while actual <= fecha_hasta:
+            clave = actual.isoformat()
+            horas = totales.get(clave, 0.0)
+            es_fin_de_semana = actual.weekday() >= 5
+            dias.append((clave, horas, es_fin_de_semana))
+            actual += timedelta(days=1)
+
+        return dias
 
 
 # --- Ventana Principal ---
