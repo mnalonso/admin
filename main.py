@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QDialog,
     QDialogButtonBox,
+    QComboBox,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -397,30 +398,11 @@ class VistaActividadUsuario(QWidget):
         return issues
 
 
-class VistaHorasCargadas(QWidget):
+class HorasPanel(QWidget):
     def __init__(self, credentials: Tuple[str, str]):
         super().__init__()
         self._credentials = credentials
-
         layout = QVBoxLayout(self)
-        header = QHBoxLayout()
-        header.addWidget(QLabel("<b>Horas cargadas</b>"))
-        header.addStretch()
-        layout.addLayout(header)
-
-        form = QHBoxLayout()
-        self._entrada_usuario = QLineEdit()
-        self._entrada_usuario.setPlaceholderText("Ingresá ID numérico o usuario de Redmine")
-        form.addWidget(self._entrada_usuario)
-
-        self._btn_buscar = QPushButton("Buscar")
-        self._btn_buscar.clicked.connect(self.buscar_usuario)
-        form.addWidget(self._btn_buscar)
-        layout.addLayout(form)
-
-        self._estado = QLabel("Ingresá un usuario y presioná Buscar.")
-        self._estado.setWordWrap(True)
-        layout.addWidget(self._estado)
 
         self._tablas = {
             "actual": self._crear_tabla("Mes en curso"),
@@ -430,6 +412,32 @@ class VistaHorasCargadas(QWidget):
         layout.addWidget(self._tablas["actual"]["contenedor"])
         layout.addWidget(self._tablas["anterior"]["contenedor"])
 
+    def limpiar(self):
+        for tabla in self._tablas.values():
+            tabla_widget = tabla["tabla"]
+            tabla_widget.clearContents()
+            tabla_widget.setRowCount(0)
+            tabla_widget.setColumnCount(0)
+            tabla_widget.setHorizontalHeaderLabels([])
+
+    def mostrar_para_usuario(self, usuario_id: int):
+        rango_anterior, rango_actual = self._calcular_rangos()
+        horas_anterior = self._obtener_horas_por_dia(usuario_id, *rango_anterior)
+        horas_actual = self._obtener_horas_por_dia(usuario_id, *rango_actual)
+
+        self._cargar_tabla(self._tablas["anterior"]["tabla"], horas_anterior)
+        self._cargar_tabla(self._tablas["actual"]["tabla"], horas_actual)
+
+        total_anterior = sum(horas for _, horas, _ in horas_anterior)
+        total_actual = sum(horas for _, horas, _ in horas_actual)
+
+        return {
+            "anterior_total": total_anterior,
+            "anterior_dias": len(horas_anterior),
+            "actual_total": total_actual,
+            "actual_dias": len(horas_actual),
+        }
+
     def _crear_tabla(self, titulo: str):
         contenedor = QWidget()
         contenedor_layout = QVBoxLayout(contenedor)
@@ -437,64 +445,23 @@ class VistaHorasCargadas(QWidget):
         contenedor_layout.addWidget(QLabel(f"<b>{titulo}</b>"))
         tabla = QTableWidget(0, 0)
         tabla.setEditTriggers(QTableWidget.NoEditTriggers)
-        tabla.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        tabla.horizontalHeader().setDefaultSectionSize(60)
-        tabla.horizontalHeader().setMinimumSectionSize(40)
+        header = tabla.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setDefaultSectionSize(42)
+        header.setMinimumSectionSize(28)
         tabla.verticalHeader().setVisible(True)
         contenedor_layout.addWidget(tabla)
         return {"contenedor": contenedor, "tabla": tabla}
 
-    def buscar_usuario(self):
-        identificador = self._entrada_usuario.text().strip()
-        if not identificador:
-            QMessageBox.warning(self, "Dato requerido", "Ingresá un ID o usuario de Redmine.")
-            return
-
-        self._btn_buscar.setEnabled(False)
-        self._estado.setText("Buscando horas cargadas…")
-        QApplication.processEvents()
-
-        try:
-            usuario_id, usuario_nombre = resolver_usuario(self._credentials, identificador)
-            if usuario_id is None:
-                self._estado.setText("No se encontró el usuario especificado.")
-                self._limpiar_tablas()
-                self._btn_buscar.setEnabled(True)
-                return
-
-            rango_anterior, rango_actual = self._calcular_rangos()
-            horas_anterior = self._obtener_horas_por_dia(usuario_id, *rango_anterior)
-            horas_actual = self._obtener_horas_por_dia(usuario_id, *rango_actual)
-        except (RequestException, ValueError) as exc:
-            self._estado.setText(f"Error consultando Redmine: {exc}")
-            self._limpiar_tablas()
-            self._btn_buscar.setEnabled(True)
-            return
-
-        total_anterior = sum(horas for _, horas, _ in horas_anterior)
-        total_actual = sum(horas for _, horas, _ in horas_actual)
-
-        self._cargar_tabla(self._tablas["anterior"]["tabla"], horas_anterior)
-        self._cargar_tabla(self._tablas["actual"]["tabla"], horas_actual)
-
-        self._estado.setText(
-            (
-                f"Usuario: {usuario_nombre} (ID {usuario_id}). "
-                f"Mes anterior: {total_anterior:.2f} h en {len(horas_anterior)} días. "
-                f"Mes en curso: {total_actual:.2f} h en {len(horas_actual)} días."
-            )
-        )
-        self._btn_buscar.setEnabled(True)
-
     def _cargar_tabla(self, tabla: QTableWidget, datos):
+        tabla.clearContents()
+        tabla.setRowCount(0)
+        tabla.setColumnCount(0)
+
         if not datos:
-            tabla.clearContents()
-            tabla.setRowCount(0)
-            tabla.setColumnCount(0)
             tabla.setHorizontalHeaderLabels([])
             return
 
-        tabla.clearContents()
         tabla.setRowCount(1)
         tabla.setColumnCount(len(datos))
         encabezados = []
@@ -510,14 +477,6 @@ class VistaHorasCargadas(QWidget):
 
         tabla.setHorizontalHeaderLabels(encabezados)
         tabla.setVerticalHeaderLabels(["Horas"])
-
-    def _limpiar_tablas(self):
-        for tabla in self._tablas.values():
-            tabla_widget = tabla["tabla"]
-            tabla_widget.clearContents()
-            tabla_widget.setRowCount(0)
-            tabla_widget.setColumnCount(0)
-            tabla_widget.setHorizontalHeaderLabels([])
 
     def _calcular_rangos(self):
         hoy = date.today()
@@ -558,6 +517,168 @@ class VistaHorasCargadas(QWidget):
         return dias
 
 
+class VistaHorasCargadas(QWidget):
+    def __init__(self, credentials: Tuple[str, str]):
+        super().__init__()
+        self._credentials = credentials
+
+        layout = QVBoxLayout(self)
+        header = QHBoxLayout()
+        header.addWidget(QLabel("<b>Horas cargadas</b>"))
+        header.addStretch()
+        layout.addLayout(header)
+
+        form = QHBoxLayout()
+        self._entrada_usuario = QLineEdit()
+        self._entrada_usuario.setPlaceholderText("Ingresá ID numérico o usuario de Redmine")
+        form.addWidget(self._entrada_usuario)
+
+        self._btn_buscar = QPushButton("Buscar")
+        self._btn_buscar.clicked.connect(self.buscar_usuario)
+        form.addWidget(self._btn_buscar)
+        layout.addLayout(form)
+
+        self._estado = QLabel("Ingresá un usuario y presioná Buscar.")
+        self._estado.setWordWrap(True)
+        layout.addWidget(self._estado)
+
+        self._panel = HorasPanel(self._credentials)
+        layout.addWidget(self._panel)
+
+    def buscar_usuario(self):
+        identificador = self._entrada_usuario.text().strip()
+        if not identificador:
+            QMessageBox.warning(self, "Dato requerido", "Ingresá un ID o usuario de Redmine.")
+            return
+
+        self._btn_buscar.setEnabled(False)
+        self._estado.setText("Buscando horas cargadas…")
+        QApplication.processEvents()
+
+        try:
+            usuario_id, usuario_nombre = resolver_usuario(self._credentials, identificador)
+            if usuario_id is None:
+                self._estado.setText("No se encontró el usuario especificado.")
+                self._panel.limpiar()
+                self._btn_buscar.setEnabled(True)
+                return
+
+            resumen = self._panel.mostrar_para_usuario(usuario_id)
+        except (RequestException, ValueError) as exc:
+            self._estado.setText(f"Error consultando Redmine: {exc}")
+            self._panel.limpiar()
+            self._btn_buscar.setEnabled(True)
+            return
+
+        nombre = usuario_nombre or identificador
+        self._estado.setText(
+            (
+                f"Usuario: {nombre} (ID {usuario_id}). "
+                f"Mes anterior: {resumen['anterior_total']:.2f} h en {resumen['anterior_dias']} días. "
+                f"Mes en curso: {resumen['actual_total']:.2f} h en {resumen['actual_dias']} días."
+            )
+        )
+        self._btn_buscar.setEnabled(True)
+
+
+class VistaHorasTeam(QWidget):
+    _USUARIOS = [
+        "jarmentia",
+        "pchero",
+        "jpaez",
+        "agroppa",
+        "rmonte",
+        "rgil",
+        "lgaetan",
+        "gsilva",
+        "afontana",
+    ]
+
+    def __init__(self, credentials: Tuple[str, str]):
+        super().__init__()
+        self._credentials = credentials
+        self._cache_usuarios: dict[str, Tuple[int, str | None]] = {}
+        self._cargando = False
+
+        layout = QVBoxLayout(self)
+        header = QHBoxLayout()
+        header.addWidget(QLabel("<b>Horas team</b>"))
+        header.addStretch()
+        self._btn_actualizar = QPushButton("Actualizar")
+        self._btn_actualizar.clicked.connect(self._consultar_usuario_actual)
+        header.addWidget(self._btn_actualizar)
+        layout.addLayout(header)
+
+        selector_layout = QHBoxLayout()
+        selector_layout.addWidget(QLabel("Usuario:"))
+        self._combo = QComboBox()
+        self._combo.blockSignals(True)
+        for usuario in self._USUARIOS:
+            self._combo.addItem(usuario, usuario)
+        self._combo.blockSignals(False)
+        self._combo.currentIndexChanged.connect(self._on_usuario_cambiado)
+        selector_layout.addWidget(self._combo)
+        selector_layout.addStretch()
+        layout.addLayout(selector_layout)
+
+        self._estado = QLabel("Seleccioná un usuario para ver las horas cargadas.")
+        self._estado.setWordWrap(True)
+        layout.addWidget(self._estado)
+
+        self._panel = HorasPanel(self._credentials)
+        layout.addWidget(self._panel)
+
+        if self._combo.count():
+            self._consultar_usuario_actual()
+
+    def _on_usuario_cambiado(self):
+        if self._cargando:
+            return
+        self._consultar_usuario_actual()
+
+    def _consultar_usuario_actual(self):
+        if not self._combo.count():
+            return
+
+        identificador = self._combo.currentData()
+        if not identificador:
+            return
+
+        self._establecer_cargando(True)
+        self._estado.setText("Buscando horas cargadas…")
+        QApplication.processEvents()
+
+        try:
+            if identificador in self._cache_usuarios:
+                usuario_id, nombre_cache = self._cache_usuarios[identificador]
+            else:
+                usuario_id, nombre_cache = resolver_usuario(self._credentials, identificador)
+                if usuario_id is None:
+                    raise ValueError("No se encontró el usuario especificado en Redmine.")
+                self._cache_usuarios[identificador] = (usuario_id, nombre_cache)
+
+            resumen = self._panel.mostrar_para_usuario(usuario_id)
+        except (RequestException, ValueError) as exc:
+            self._estado.setText(f"Error consultando Redmine: {exc}")
+            self._panel.limpiar()
+        else:
+            nombre_visible = nombre_cache or identificador
+            self._estado.setText(
+                (
+                    f"Usuario: {nombre_visible} (ID {usuario_id}). "
+                    f"Mes anterior: {resumen['anterior_total']:.2f} h en {resumen['anterior_dias']} días. "
+                    f"Mes en curso: {resumen['actual_total']:.2f} h en {resumen['actual_dias']} días."
+                )
+            )
+        finally:
+            self._establecer_cargando(False)
+
+    def _establecer_cargando(self, cargando: bool):
+        self._cargando = cargando
+        self._combo.setEnabled(not cargando)
+        self._btn_actualizar.setEnabled(not cargando)
+
+
 # --- Ventana Principal ---
 class VentanaPrincipal(QMainWindow):
     def __init__(self, credentials: Tuple[str, str]):
@@ -570,6 +691,7 @@ class VentanaPrincipal(QMainWindow):
         self.tabs.addTab(VistaTicketsSoporte(self._credentials), "Tickets de soporte")
         self.tabs.addTab(VistaActividadUsuario(self._credentials), "Actividad usuario")
         self.tabs.addTab(VistaHorasCargadas(self._credentials), "Horas cargadas")
+        self.tabs.addTab(VistaHorasTeam(self._credentials), "Horas team")
         self.setCentralWidget(self.tabs)
 
 
