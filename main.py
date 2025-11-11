@@ -1,429 +1,132 @@
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QVBoxLayout, QTabWidget,
-    QToolBar, QStatusBar, QFileDialog, QMessageBox, QMenu, QStyle, QStyleFactory,
-    QTableWidget, QTableWidgetItem, QFormLayout, QLineEdit, QPushButton, QHBoxLayout, QHeaderView,
-    QDialog, QDialogButtonBox
-)
-from PySide6.QtGui import QAction, QIcon
-from PySide6.QtCore import Qt
+import json
 import sys
-from typing import Tuple
+from pathlib import Path
 
-import requests
-from requests.auth import HTTPBasicAuth
-from requests.exceptions import RequestException
-
-
-# ====== JSON embebido (tu ejemplo) ======
-ISSUES_JSON = {
-    "issues": [
-        {
-            "id": 12881,
-            "project": {"id": 42, "name": "PIN - Desarrollo"},
-            "tracker": {"id": 7, "name": "Historia"},
-            "status": {"id": 3, "name": "RTD", "is_closed": False},
-            "priority": {"id": 1, "name": "Baja"},
-            "author": {"id": 172, "name": "Florencia Galarza"},
-            "assigned_to": {"id": 211, "name": "Jean Pierre Chero Pomaleque"},
-            "category": {"id": 42, "name": "WEB"},
-            "fixed_version": {"id": 107, "name": "SPR 129"},
-            "subject": "Diferencias entre mobile y desktop  - carrito paso 3",
-            "description": "<p>Buenas!&nbsp;</p>\r\n\r\n<p>Me aviso Matias Mainini que desde el celu no puede elegir la opci\u00f3n de \u00a8otras condiciones\u00a8 dentro de las formas de pago<br />\r\n<br />\r\n![Imagen](img_66e091d53a5f7.png)</p>\r\n\r\n<p>![Imagen](img_66e091d546321.png)</p>",
-            "start_date": "2025-07-23",
-            "due_date": "2025-08-07",
-            "done_ratio": 0,
-            "is_private": False,
-            "estimated_hours": 16,
-            "total_estimated_hours": 16,
-            "spent_hours": 15.083333253860474,
-            "total_spent_hours": 15.083333253860474,
-            "custom_fields": [
-                {"id": 18, "name": "Sector", "value": "Productos Digitales"},
-                {"id": 31, "name": "Gerencia", "value": "Planeamiento Comercial"},
-                {"id": 33, "name": "Analista", "multiple": True, "value": ["Mariana Peralta"]},
-                {"id": 59, "name": "Origen", "value": ""}
-            ],
-            "created_on": "2024-09-10T18:37:09Z",
-            "updated_on": "2025-10-23T17:38:13Z",
-            "closed_on": None
-        }
-    ],
-    "total_count": 1,
-    "offset": 0,
-    "limit": 25
-}
-
-REDMINE_ISSUES_URL = (
-    "https://redmine.famiq.com.ar/projects/ipin/issues.json?query_id=77&"
-    "sort=priority%3Adesc%2Cupdated_on%3Adesc"
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
 )
 
 
-class CredencialesDialog(QDialog):
-    def __init__(self, parent=None):
+class PanelCargaJSON(QWidget):
+    """Panel izquierdo encargado de cargar y mostrar un JSON sin procesar."""
+
+    json_cargado = Signal(dict, str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Credenciales de Redmine")
+
+        self._nombre_archivo = QLabel("Ningún archivo seleccionado")
+        self._nombre_archivo.setWordWrap(True)
+
+        self._btn_cargar = QPushButton("Cargar JSON…")
+        self._btn_cargar.clicked.connect(self._abrir_dialogo_archivo)
+
+        self._texto_crudo = QPlainTextEdit()
+        self._texto_crudo.setPlaceholderText("Contenido original del archivo JSON")
+        self._texto_crudo.setReadOnly(True)
+
         layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("<b>Entrada</b>"))
+        layout.addWidget(self._nombre_archivo)
+        layout.addWidget(self._btn_cargar)
+        layout.addWidget(self._texto_crudo, stretch=1)
 
-        form = QFormLayout()
-        self._usuario = QLineEdit()
-        self._usuario.setPlaceholderText("Usuario")
-        self._clave = QLineEdit()
-        self._clave.setPlaceholderText("Contraseña")
-        self._clave.setEchoMode(QLineEdit.Password)
-
-        form.addRow("Usuario:", self._usuario)
-        form.addRow("Contraseña:", self._clave)
-        layout.addLayout(form)
-
-        self._buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        self._buttons.accepted.connect(self.accept)
-        self._buttons.rejected.connect(self.reject)
-        layout.addWidget(self._buttons)
-
-    def get_credentials(self) -> Tuple[str, str]:
-        return self._usuario.text().strip(), self._clave.text()
-
-    def accept(self):
-        usuario, clave = self.get_credentials()
-        if not usuario or not clave:
-            QMessageBox.warning(self, "Credenciales incompletas", "Ingresá usuario y contraseña de Redmine.")
-            return
-        super().accept()
-
-
-# --- Vista con formulario + tabla (para la pestaña "Inicio") ---
-class VistaInicio(QWidget):
-    def __init__(self):
-        super().__init__()
-        layout = QVBoxLayout(self)
-
-        # --- Formulario simple ---
-        form = QFormLayout()
-        self.txt_nombre = QLineEdit()
-        self.txt_apellido = QLineEdit()
-        self.txt_email = QLineEdit()
-        btn_enviar = QPushButton("Enviar")
-        btn_enviar.clicked.connect(self.enviar_formulario)
-
-        form.addRow("Nombre:", self.txt_nombre)
-        form.addRow("Apellido:", self.txt_apellido)
-        form.addRow("Email:", self.txt_email)
-        layout.addLayout(form)
-        layout.addWidget(btn_enviar)
-
-        # --- Tabla de ejemplo 6x10 ---
-        tabla = QTableWidget(6, 10)
-        tabla.setHorizontalHeaderLabels([f"Col {i+1}" for i in range(10)])
-        for f in range(6):
-            for c in range(10):
-                tabla.setItem(f, c, QTableWidgetItem(f"Fila {f+1}, Col {c+1}"))
-        layout.addWidget(tabla)
-
-        layout.addStretch()
-        self.tabla = tabla
-
-    def enviar_formulario(self):
-        nombre = self.txt_nombre.text()
-        apellido = self.txt_apellido.text()
-        email = self.txt_email.text()
-        QMessageBox.information(
+    def _abrir_dialogo_archivo(self) -> None:
+        ruta, _ = QFileDialog.getOpenFileName(
             self,
-            "Formulario enviado",
-            f"Nombre: {nombre}\nApellido: {apellido}\nEmail: {email}"
+            "Seleccionar archivo JSON",
+            "",
+            "Archivos JSON (*.json);;Todos los archivos (*.*)",
         )
-
-
-# --- Vista 2: tabla desde JSON de issues ---
-class VistaIssues(QWidget):
-    def __init__(self, data: dict):
-        super().__init__()
-        layout = QVBoxLayout(self)
-
-        # Definimos columnas "importantes"
-        headers = [
-            "ID", "Proyecto", "Tracker", "Estado", "Prioridad",
-            "Asignado a", "Versión", "Subject",
-            "Estimado", "Spent", "Inicio", "Vencimiento", "Actualizado"
-        ]
-        table = QTableWidget(0, len(headers))
-        table.setHorizontalHeaderLabels(headers)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        table.horizontalHeader().setStretchLastSection(True)
-
-        issues = data.get("issues", []) or []
-        table.setRowCount(len(issues))
-
-        def g(obj, *path, default=""):
-            cur = obj
-            for p in path:
-                cur = cur.get(p) if isinstance(cur, dict) else None
-                if cur is None:
-                    return default
-            return cur
-
-        for r, it in enumerate(issues):
-            values = [
-                g(it, "id"),
-                g(it, "project", "name"),
-                g(it, "tracker", "name"),
-                g(it, "status", "name"),
-                g(it, "priority", "name"),
-                g(it, "assigned_to", "name"),
-                g(it, "fixed_version", "name"),
-                g(it, "subject"),
-                f"{g(it, 'estimated_hours') or 0:.2f}",
-                f"{g(it, 'spent_hours') or 0:.2f}",
-                g(it, "start_date"),
-                g(it, "due_date"),
-                g(it, "updated_on"),
-            ]
-            for c, val in enumerate(values):
-                item = QTableWidgetItem(str(val))
-                if headers[c] in ("ID", "Estimado", "Spent"):
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                table.setItem(r, c, item)
-
-        layout.addWidget(QLabel("<b>Issues (datos principales)</b>"))
-        layout.addWidget(table)
-        self.table = table
-
-
-class VistaTicketsSoporte(QWidget):
-    def __init__(self, credentials: Tuple[str, str]):
-        super().__init__()
-        self._credentials = credentials
-
-        layout = QVBoxLayout(self)
-        header = QHBoxLayout()
-        header.addWidget(QLabel("<b>Tickets de soporte</b>"))
-        header.addStretch()
-        self._btn_refresh = QPushButton("Actualizar")
-        self._btn_refresh.clicked.connect(self.cargar_datos)
-        header.addWidget(self._btn_refresh)
-        layout.addLayout(header)
-
-        self._estado = QLabel()
-        self._estado.setWordWrap(True)
-        layout.addWidget(self._estado)
-
-        self._headers = [
-            "ID", "Proyecto", "Tracker", "Estado", "Prioridad",
-            "Asignado a", "Sector", "Gerencia", "Origen", "Subject", "Actualizado"
-        ]
-        self._tabla = QTableWidget(0, len(self._headers))
-        self._tabla.setHorizontalHeaderLabels(self._headers)
-        self._tabla.setEditTriggers(QTableWidget.NoEditTriggers)
-        self._tabla.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self._tabla.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(self._tabla)
-
-        self.cargar_datos()
-
-    def cargar_datos(self):
-        self._btn_refresh.setEnabled(False)
-        self._estado.setText("Cargando tickets desde Redmine…")
-        QApplication.processEvents()
-
-        usuario, clave = self._credentials
-        try:
-            respuesta = requests.get(
-                REDMINE_ISSUES_URL,
-                auth=HTTPBasicAuth(usuario, clave),
-                timeout=15,
-            )
-            respuesta.raise_for_status()
-            data = respuesta.json()
-            issues = data.get("issues", []) or []
-        except (RequestException, ValueError) as exc:
-            self._tabla.setRowCount(0)
-            self._estado.setText(f"Error al obtener tickets: {exc}")
-            self._btn_refresh.setEnabled(True)
+        if not ruta:
             return
 
-        self._tabla.setRowCount(len(issues))
+        try:
+            contenido = Path(ruta).read_text(encoding="utf-8")
+            data = json.loads(contenido)
+        except (OSError, json.JSONDecodeError) as exc:
+            QMessageBox.critical(self, "Error", f"No se pudo cargar el JSON:\n{exc}")
+            return
 
-        def buscar_custom_field(campos, nombre):
-            for campo in campos or []:
-                if campo.get("name") == nombre:
-                    valor = campo.get("value")
-                    if isinstance(valor, list):
-                        return ", ".join(valor)
-                    return valor or ""
-            return ""
-
-        for fila, issue in enumerate(issues):
-            custom_fields = issue.get("custom_fields")
-            valores = [
-                issue.get("id", ""),
-                issue.get("project", {}).get("name", ""),
-                issue.get("tracker", {}).get("name", ""),
-                issue.get("status", {}).get("name", ""),
-                issue.get("priority", {}).get("name", ""),
-                issue.get("assigned_to", {}).get("name", ""),
-                buscar_custom_field(custom_fields, "Sector"),
-                buscar_custom_field(custom_fields, "Gerencia"),
-                buscar_custom_field(custom_fields, "Origen"),
-                issue.get("subject", ""),
-                issue.get("updated_on", ""),
-            ]
-            for col, valor in enumerate(valores):
-                item = QTableWidgetItem(str(valor))
-                if self._headers[col] == "ID":
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                self._tabla.setItem(fila, col, item)
-
-        self._estado.setText(f"Tickets cargados: {len(issues)}")
-        self._btn_refresh.setEnabled(True)
+        self._nombre_archivo.setText(ruta)
+        self._texto_crudo.setPlainText(contenido)
+        self.json_cargado.emit(data, contenido)
 
 
-# --- Vista genérica (para las otras pestañas) ---
-class VistaPlaceholder(QWidget):
-    def __init__(self, titulo: str, descripcion: str = ""):
-        super().__init__()
-        lay = QVBoxLayout(self)
-        lbl_t = QLabel(f"<h2>{titulo}</h2>")
-        lbl_d = QLabel(descripcion or "Contenido de ejemplo…")
-        lbl_t.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        lbl_d.setWordWrap(True)
-        lay.addWidget(lbl_t)
-        lay.addWidget(lbl_d)
-        lay.addStretch()
+class PanelJSONProcesado(QWidget):
+    """Panel central para mostrar el JSON transformado."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+
+        self._texto = QPlainTextEdit()
+        self._texto.setPlaceholderText("Aquí se mostrará el JSON procesado")
+        self._texto.setReadOnly(True)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("<b>JSON procesado</b>"))
+        layout.addWidget(self._texto, stretch=1)
+
+    def actualizar_json(self, data: dict, _contenido_original: str) -> None:
+        try:
+            procesado = json.dumps(data, indent=4, ensure_ascii=False)
+        except (TypeError, ValueError):
+            procesado = "No fue posible transformar el contenido en JSON legible."
+        self._texto.setPlainText(procesado)
 
 
-# --- Ventana Principal ---
+class PanelVacio(QWidget):
+    """Panel derecho sin contenido por el momento."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        mensaje = QLabel("<b>Panel libre</b><br>Sin contenido por ahora.")
+        mensaje.setAlignment(Qt.AlignCenter)
+        mensaje.setWordWrap(True)
+        layout.addWidget(mensaje, alignment=Qt.AlignCenter)
+        layout.addStretch()
+
+
 class VentanaPrincipal(QMainWindow):
-    def __init__(self, credentials: Tuple[str, str]):
+    def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Demo PySide6 - Menú + Formulario + Tabla + Issues")
-        self.resize(1000, 650)
-        self._credentials = credentials
+        self.setWindowTitle("Procesador de JSON")
+        self.resize(1200, 700)
 
-        # ----- Crear pestañas -----
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.tabs.setMovable(True)
+        panel_carga = PanelCargaJSON(self)
+        panel_procesado = PanelJSONProcesado(self)
+        panel_vacio = PanelVacio(self)
 
-        vistas = [
-            ("Inicio", VistaInicio()),
-            # PESTAÑA 2: acá metemos la tabla desde el JSON
-            ("Tickets RTD", VistaIssues(ISSUES_JSON)),
-            ("Carga de horas", VistaPlaceholder("Formas", "Rectángulos, círculos, flechas.")),
-            ("Corrector de tickets", VistaPlaceholder("Texto", "Cajas de texto, tipografías.")),
-            ("Tickets de soporte", VistaTicketsSoporte(self._credentials)),
-            ("Colores", VistaPlaceholder("Colores", "Paletas, cuentagotas.")),
-            ("Efectos", VistaPlaceholder("Efectos", "Filtros y ajustes rápidos.")),
-            ("Capas", VistaPlaceholder("Capas", "Organiza elementos por capas.")),
-            ("Historial", VistaPlaceholder("Historial", "Deshacer/rehacer y snapshots.")),
-            ("Configuración", VistaPlaceholder("Configuración", "Preferencias de la aplicación."))
-        ]
-        for nombre, widget in vistas:
-            self.tabs.addTab(widget, nombre)
-        self.setCentralWidget(self.tabs)
+        panel_carga.json_cargado.connect(panel_procesado.actualizar_json)
 
-        # ----- Menús, barra, estado -----
-        self._crear_menus()
-        self._crear_toolbar()
-        self.status = QStatusBar()
-        self.setStatusBar(self.status)
-        self.status.showMessage("Listo")
-        QApplication.setStyle(QStyleFactory.create("Fusion"))
+        contenedor = QSplitter(Qt.Horizontal)
+        contenedor.addWidget(panel_carga)
+        contenedor.addWidget(panel_procesado)
+        contenedor.addWidget(panel_vacio)
+        contenedor.setStretchFactor(0, 1)
+        contenedor.setStretchFactor(1, 1)
+        contenedor.setStretchFactor(2, 1)
 
-    # ====== Menús ======
-    def _crear_menus(self):
-        menubar = self.menuBar()
+        self.setCentralWidget(contenedor)
 
-        # Archivo
-        m_archivo = menubar.addMenu("&Archivo")
-        act_nuevo = QAction(self.style().standardIcon(QStyle.SP_FileIcon), "Nuevo", self)
-        act_nuevo.setShortcut("Ctrl+N")
-        act_nuevo.triggered.connect(self.accion_nuevo)
 
-        act_abrir = QAction(self.style().standardIcon(QStyle.SP_DialogOpenButton), "Abrir…", self)
-        act_abrir.setShortcut("Ctrl+O")
-        act_abrir.triggered.connect(self.accion_abrir)
-
-        act_guardar = QAction(self.style().standardIcon(QStyle.SP_DialogSaveButton), "Guardar", self)
-        act_guardar.setShortcut("Ctrl+S")
-        act_guardar.triggered.connect(self.accion_guardar)
-
-        m_archivo.addAction(act_nuevo)
-        m_archivo.addAction(act_abrir)
-        m_archivo.addAction(act_guardar)
-        m_archivo.addSeparator()
-        m_archivo.addAction("Salir", self.close)
-
-        # Editar
-        m_editar = menubar.addMenu("&Editar")
-        for texto, sc in [("Deshacer", "Ctrl+Z"), ("Rehacer", "Ctrl+Y"),
-                          ("Copiar", "Ctrl+C"), ("Pegar", "Ctrl+V")]:
-            act = QAction(texto, self)
-            act.setShortcut(sc)
-            act.triggered.connect(self._accion_stub)
-            m_editar.addAction(act)
-
-        # Ver
-        m_ver = menubar.addMenu("&Ver")
-        self.act_toggle_toolbar = QAction("Mostrar barra de herramientas", self, checkable=True, checked=True)
-        self.act_toggle_toolbar.triggered.connect(self._toggle_toolbar)
-        self.act_toggle_status = QAction("Mostrar barra de estado", self, checkable=True, checked=True)
-        self.act_toggle_status.triggered.connect(self._toggle_status)
-        m_ver.addAction(self.act_toggle_toolbar)
-        m_ver.addAction(self.act_toggle_status)
-
-        # Ayuda
-        m_ayuda = menubar.addMenu("Ay&uda")
-        act_acerca = QAction("Acerca de…", self)
-        act_acerca.triggered.connect(self.accion_acerca_de)
-        m_ayuda.addAction(act_acerca)
-
-        self.act_nuevo = act_nuevo
-        self.act_abrir = act_abrir
-        self.act_guardar = act_guardar
-
-    # ====== Toolbar ======
-    def _crear_toolbar(self):
-        tb = QToolBar("Acceso rápido", self)
-        tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.addToolBar(Qt.TopToolBarArea, tb)
-        tb.addAction(self.act_nuevo)
-        tb.addAction(self.act_abrir)
-        tb.addAction(self.act_guardar)
-        self.toolbar = tb
-
-    # ====== Acciones y helpers ======
-    def _toggle_toolbar(self, checked): self.toolbar.setVisible(checked)
-    def _toggle_status(self, checked): self.statusBar().setVisible(checked)
-    def _accion_stub(self): self.status.showMessage("Acción demo", 2000)
-
-    def accion_nuevo(self):
-        QMessageBox.information(self, "Nuevo", "Crear un nuevo documento.")
-
-    def accion_abrir(self):
-        ruta, _ = QFileDialog.getOpenFileName(self, "Abrir", "", "Proyecto (*.pnt);;Todos (*.*)")
-        if ruta:
-            QMessageBox.information(self, "Abrir", f"Abriste:\n{ruta}")
-
-    def accion_guardar(self):
-        ruta, _ = QFileDialog.getSaveFileName(self, "Guardar", "proyecto.pnt", "Proyecto (*.pnt)")
-        if ruta:
-            QMessageBox.information(self, "Guardar", f"Guardado en:\n{ruta}")
-
-    def accion_acerca_de(self):
-        QMessageBox.information(
-            self, "Acerca de",
-            "Demo PySide6\nMenú tipo Paint + Formulario + Tabla + Issues (JSON)."
-        )
+def main() -> int:
+    app = QApplication(sys.argv)
+    ventana = VentanaPrincipal()
+    ventana.show()
+    return app.exec()
 
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    dlg = CredencialesDialog()
-    if dlg.exec() != QDialog.Accepted:
-        sys.exit(0)
-
-    credenciales = dlg.get_credentials()
-    win = VentanaPrincipal(credenciales)
-    win.show()
-    sys.exit(app.exec())
+    sys.exit(main())
