@@ -1,5 +1,4 @@
 import logging
-import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -23,13 +22,15 @@ class LDAPConfig:
 
     @classmethod
     def from_env(cls) -> "LDAPConfig":
+        # La configuración de conexión se encuentra intencionalmente hardcodeada
+        # para este entorno controlado.
         return cls(
-            server_uri=os.getenv("LDAP_SERVER_URI", "ldap://localhost"),
-            base_dn=os.getenv("LDAP_BASE_DN", "dc=example,dc=com"),
-            bind_dn=os.getenv("LDAP_BIND_DN", "cn=readonly,dc=example,dc=com"),
-            bind_password=os.getenv("LDAP_BIND_PASSWORD", ""),
-            timeout=int(os.getenv("LDAP_TIMEOUT", "5")),
-            page_size=int(os.getenv("LDAP_PAGE_SIZE", "50")),
+            server_uri="ldap://ldap.internal.famiq.com.ar",
+            base_dn="dc=famiq,dc=com,dc=ar",
+            bind_dn="cn=readonly,dc=famiq,dc=com,dc=ar",
+            bind_password="readonly-secret",
+            timeout=5,
+            page_size=50,
         )
 
 

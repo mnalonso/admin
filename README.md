@@ -2,17 +2,18 @@
 
 Este proyecto incluye una pequeña aplicación de escritorio (PySide6) y un servicio interno para consultar el Directorio Activo a través de un endpoint HTTP.
 
-## Configuración de entorno
+## Configuración de conexión
 
-Las credenciales y parámetros de LDAP se leen desde variables de entorno para evitar hardcodear datos sensibles:
+Para este entorno la configuración de LDAP se encuentra hardcodeada en `ldap_service.LDAPConfig.from_env` con los siguientes valores de ejemplo:
 
-- `LDAP_SERVER_URI`: URL del servidor LDAP (ej. `ldap://ldap.example.com`).
-- `LDAP_BASE_DN`: Base DN desde donde se realizará la búsqueda.
-- `LDAP_BIND_DN`: Usuario de solo lectura para el bind.
-- `LDAP_BIND_PASSWORD`: Contraseña del bind de solo lectura.
-- `LDAP_TIMEOUT`: Tiempo máximo en segundos para respuestas LDAP (por defecto 5).
-- `LDAP_PAGE_SIZE`: Tamaño de página para la paginación del servicio.
-- `DIRECTORIO_API_URL`: URL del endpoint `/ldap/search` que consume la pestaña de frontend (por defecto `http://localhost:8000/ldap/search`).
+- `LDAP_SERVER_URI`: `ldap://ldap.internal.famiq.com.ar`.
+- `LDAP_BASE_DN`: `dc=famiq,dc=com,dc=ar`.
+- `LDAP_BIND_DN`: `cn=readonly,dc=famiq,dc=com,dc=ar`.
+- `LDAP_BIND_PASSWORD`: `readonly-secret`.
+- `LDAP_TIMEOUT`: `5`.
+- `LDAP_PAGE_SIZE`: `50`.
+
+La pestaña de frontend sigue leyendo `DIRECTORIO_API_URL` desde el entorno (por defecto `http://localhost:8000/ldap/search`).
 
 ## Uso del endpoint
 
