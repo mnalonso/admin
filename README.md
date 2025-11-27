@@ -4,12 +4,12 @@ Este proyecto incluye una pequeña aplicación de escritorio (PySide6) y un serv
 
 ## Configuración de conexión
 
-Para este entorno la configuración de LDAP se encuentra hardcodeada en `ldap_service.LDAPConfig.from_env` con los siguientes valores de ejemplo:
+Para este entorno la configuración de LDAP se encuentra hardcodeada en `ldap_service.LDAPConfig.from_env` con los siguientes valores provistos:
 
-- `LDAP_SERVER_URI`: `ldap://ldap.internal.famiq.com.ar`.
-- `LDAP_BASE_DN`: `dc=famiq,dc=com,dc=ar`.
-- `LDAP_BIND_DN`: `cn=readonly,dc=famiq,dc=com,dc=ar`.
-- `LDAP_BIND_PASSWORD`: `readonly-secret`.
+- `LDAP_SERVER_URI`: `ldap://10.1.43.7:389`.
+- `LDAP_BASE_DN`: `DC=famiq,DC=local`.
+- `LDAP_BIND_DN`: `famiq\read_ldap`.
+- `LDAP_BIND_PASSWORD`: `Qimaf_1234_zxc!`.
 - `LDAP_TIMEOUT`: `5`.
 - `LDAP_PAGE_SIZE`: `50`.
 

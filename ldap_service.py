@@ -25,10 +25,10 @@ class LDAPConfig:
         # La configuración de conexión se encuentra intencionalmente hardcodeada
         # para este entorno controlado.
         return cls(
-            server_uri="ldap://ldap.internal.famiq.com.ar",
-            base_dn="dc=famiq,dc=com,dc=ar",
-            bind_dn="cn=readonly,dc=famiq,dc=com,dc=ar",
-            bind_password="readonly-secret",
+            server_uri="ldap://10.1.43.7:389",
+            base_dn="DC=famiq,DC=local",
+            bind_dn="famiq\\read_ldap",
+            bind_password="Qimaf_1234_zxc!",
             timeout=5,
             page_size=50,
         )
