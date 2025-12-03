@@ -24,6 +24,7 @@ from typing import List, Tuple
 from collections import defaultdict
 from datetime import date, timedelta
 import calendar
+import os
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -41,6 +42,7 @@ REDMINE_USERS_URL = f"{REDMINE_BASE_URL}/users.json"
 REDMINE_USER_DETAIL_URL = f"{REDMINE_BASE_URL}/users/{{user_id}}.json"
 REDMINE_ISSUES_SEARCH_URL = f"{REDMINE_BASE_URL}/issues.json"
 REDMINE_TIME_ENTRIES_URL = f"{REDMINE_BASE_URL}/time_entries.json"
+DIRECTORIO_AD_URL = os.getenv("DIRECTORIO_API_URL", "http://localhost:8000/ldap/search")
 
 
 def formatear_horas(valor: float) -> str:
@@ -821,6 +823,150 @@ class VistaHorasTeam(QWidget):
             header.resizeSection(columna, 42)
 
 
+class VistaDirectorioAD(QWidget):
+    def __init__(self, credentials: Tuple[str, str]):
+        super().__init__()
+        self._credentials = credentials
+        self._page = 1
+        self._page_size = 10
+        self._total = 0
+        self._filtros_actuales: dict[str, str] = {}
+
+        layout = QVBoxLayout(self)
+        header = QHBoxLayout()
+        header.addWidget(QLabel("<b>Directorio AD</b>"))
+        header.addStretch()
+        layout.addLayout(header)
+
+        form = QFormLayout()
+        self._legajo = QLineEdit()
+        self._id = QLineEdit()
+        self._nombre = QLineEdit()
+        self._email = QLineEdit()
+        self._sam = QLineEdit()
+
+        form.addRow("Legajo:", self._legajo)
+        form.addRow("ID (GUID):", self._id)
+        form.addRow("Nombre:", self._nombre)
+        form.addRow("Email:", self._email)
+        form.addRow("SAMAccountName:", self._sam)
+        layout.addLayout(form)
+
+        botones = QHBoxLayout()
+        botones.addStretch()
+        self._btn_buscar = QPushButton("Buscar")
+        self._btn_buscar.clicked.connect(self._buscar)
+        botones.addWidget(self._btn_buscar)
+        layout.addLayout(botones)
+
+        self._tabla = QTableWidget()
+        self._tabla.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._tabla.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._tabla.verticalHeader().setVisible(False)
+        self._tabla.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self._tabla)
+
+        paginacion = QHBoxLayout()
+        self._btn_prev = QPushButton("Anterior")
+        self._btn_prev.clicked.connect(lambda: self._cambiar_pagina(-1))
+        self._btn_next = QPushButton("Siguiente")
+        self._btn_next.clicked.connect(lambda: self._cambiar_pagina(1))
+        self._lbl_pagina = QLabel("Página 1")
+        paginacion.addWidget(self._btn_prev)
+        paginacion.addWidget(self._btn_next)
+        paginacion.addStretch()
+        paginacion.addWidget(self._lbl_pagina)
+        layout.addLayout(paginacion)
+
+        self._render_resultados([])
+
+    def _build_filters(self) -> dict:
+        return {
+            "legajo": self._legajo.text().strip(),
+            "id": self._id.text().strip(),
+            "nombre": self._nombre.text().strip(),
+            "email": self._email.text().strip(),
+            "samaccountname": self._sam.text().strip(),
+        }
+
+    def _buscar(self):
+        filtros = {k: v for k, v in self._build_filters().items() if v}
+        if not filtros:
+            QMessageBox.warning(
+                self,
+                "Filtros requeridos",
+                "Ingresá al menos un filtro para buscar en el Directorio AD.",
+            )
+            return
+
+        self._page = 1
+        self._filtros_actuales = filtros
+        self._consultar()
+
+    def _cambiar_pagina(self, delta: int):
+        nueva = self._page + delta
+        total_paginas = max(1, (self._total + self._page_size - 1) // self._page_size)
+        if nueva < 1 or nueva > total_paginas:
+            return
+        self._page = nueva
+        self._consultar()
+
+    def _consultar(self):
+        params = {**self._filtros_actuales, "page": self._page, "page_size": self._page_size}
+        try:
+            resp = requests.get(DIRECTORIO_AD_URL, params=params, timeout=10)
+            if resp.status_code >= 400:
+                data = (
+                    resp.json()
+                    if resp.headers.get("Content-Type", "").startswith("application/json")
+                    else {}
+                )
+                mensaje = data.get("error") or "No se pudo realizar la búsqueda en el Directorio AD."
+                QMessageBox.warning(self, "Error de búsqueda", mensaje)
+                return
+            data = resp.json()
+        except RequestException as exc:
+            QMessageBox.warning(
+                self,
+                "Error de conexión",
+                f"No se pudo contactar el servicio de Directorio AD: {exc}",
+            )
+            return
+
+        resultados = data.get("results", []) if isinstance(data, dict) else []
+        self._total = data.get("total", len(resultados)) if isinstance(data, dict) else len(resultados)
+        self._render_resultados(resultados)
+        self._actualizar_paginacion()
+
+    def _render_resultados(self, resultados):
+        columnas = ["Legajo", "ID (GUID)", "Nombre", "Email", "SAMAccountName"]
+        self._tabla.setColumnCount(len(columnas))
+        self._tabla.setHorizontalHeaderLabels(columnas)
+        self._tabla.setRowCount(len(resultados))
+
+        for fila, item in enumerate(resultados):
+            valores = [
+                item.get("employeeid", ""),
+                item.get("msds-externaldirectoryobjectid", ""),
+                item.get("displayName") or item.get("cn", ""),
+                item.get("mail", ""),
+                item.get("samaccountname", ""),
+            ]
+            for col, valor in enumerate(valores):
+                self._tabla.setItem(fila, col, QTableWidgetItem(str(valor or "")))
+
+        header = self._tabla.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Stretch)
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+
+    def _actualizar_paginacion(self):
+        total_paginas = max(1, (self._total + self._page_size - 1) // self._page_size)
+        self._lbl_pagina.setText(f"Página {self._page} de {total_paginas}")
+        self._btn_prev.setEnabled(self._page > 1)
+        self._btn_next.setEnabled(self._page < total_paginas)
+
+
 # --- Ventana Principal ---
 class VentanaPrincipal(QMainWindow):
     def __init__(self, credentials: Tuple[str, str]):
@@ -834,6 +980,7 @@ class VentanaPrincipal(QMainWindow):
         self.tabs.addTab(VistaActividadUsuario(self._credentials), "Actividad usuario")
         self.tabs.addTab(VistaHorasCargadas(self._credentials), "Horas cargadas")
         self.tabs.addTab(VistaHorasTeam(self._credentials), "Horas team")
+        self.tabs.addTab(VistaDirectorioAD(self._credentials), "Directorio AD")
         self.setCentralWidget(self.tabs)
 
 
